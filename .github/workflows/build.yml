@@ -15,9 +15,96 @@ env:
 
 jobs:
   build:
+    # 使用较大的 runner 以获得更好性能
+    # 标准 runner: ubuntu-22.04 (2核, 7GB RAM) - 免费
+    # 大型 runner: ubuntu-22.04-xl (4核, 16GB RAM) - 需要 GitHub Team/Enterprise
+    # 如需使用大型 runner，取消下一行注释并注释掉 ubuntu-22.04
     runs-on: ubuntu-22.04
+    # runs-on: ubuntu-22.04-xl  # 需要付费订阅
     
     steps:
+      - name: Check runner environment
+        run: |
+          echo "=========================================="
+          echo "检查 GitHub Actions Runner 环境"
+          echo "=========================================="
+          
+          # 检查 CPU 核心数
+          CPU_CORES=$(nproc)
+          echo "CPU 核心数: $CPU_CORES"
+          if [ "$CPU_CORES" -lt 2 ]; then
+            echo "❌ 错误: CPU 核心数不足 (最少需要 2 核)"
+            exit 1
+          fi
+          
+          # 检查内存
+          TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+          TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
+          echo "总内存: ${TOTAL_MEM_GB}GB"
+          if [ "$TOTAL_MEM_GB" -lt 6 ]; then
+            echo "❌ 错误: 内存不足 (最少需要 6GB)"
+            exit 1
+          fi
+          
+          # 检查初始磁盘空间
+          INITIAL_DISK_GB=$(df / | tail -1 | awk '{print int($4/1024/1024)}')
+          echo "初始可用磁盘空间: ${INITIAL_DISK_GB}GB"
+          
+          # 检查系统架构
+          ARCH=$(uname -m)
+          echo "系统架构: $ARCH"
+          if [ "$ARCH" != "x86_64" ]; then
+            echo "❌ 错误: 仅支持 x86_64 架构"
+            exit 1
+          fi
+          
+          # 检查操作系统
+          OS_VERSION=$(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'"' -f2)
+          echo "操作系统: $OS_VERSION"
+          
+          echo "=========================================="
+          echo "✅ Runner 环境检查通过"
+          echo "=========================================="
+
+      - name: Free up disk space
+        run: |
+          echo "开始清理磁盘空间..."
+          # 删除不需要的大型软件
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /opt/hostedtoolcache/go
+          sudo rm -rf /opt/hostedtoolcache/node
+          sudo rm -rf /opt/hostedtoolcache/Python
+          sudo rm -rf /opt/hostedtoolcache/Ruby
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/julia*
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /imagegeneration
+          
+          # 删除 Docker 镜像
+          sudo docker image prune --all --force 2>/dev/null || true
+          
+          # 删除不需要的软件包
+          sudo apt-get remove -y '^llvm-.*' '^dotnet-.*' 'php.*' '^mongodb-.*' '^mysql-.*' \
+            azure-cli google-cloud-sdk google-chrome-stable firefox powershell \
+            mono-devel libgl1-mesa-dri --fix-missing 2>/dev/null || true
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          
+          # 清理 apt 缓存
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /var/cache/apt/archives/*
+          
+          # 清理日志
+          sudo rm -rf /var/log/*
+          
+          echo "磁盘空间清理完成："
+          df -h
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -27,20 +114,56 @@ jobs:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 2048
-          swap-size-mb: 1024
+          root-reserve-mb: 1024
+          swap-size-mb: 512
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
           remove-docker-images: 'true'
+          build-mount-path: '/home/runner/work'
 
-      - name: Free up additional disk space
+      - name: Validate disk space after cleanup
         run: |
-          echo "释放额外磁盘空间..."
-          sudo apt-get remove -y '^llvm-.*' '^dotnet-.*' 'php.*' azure-cli google-cloud-sdk google-chrome-stable firefox powershell mono-devel --fix-missing 2>/dev/null || true
-          sudo apt-get autoremove -y
-          sudo apt-get clean
+          echo "=========================================="
+          echo "验证磁盘空间清理结果"
+          echo "=========================================="
+          
+          # 检查根分区
+          ROOT_AVAIL_GB=$(df / | tail -1 | awk '{print int($4/1024/1024)}')
+          echo "根分区可用空间: ${ROOT_AVAIL_GB}GB"
+          
+          # 检查构建目录分区
+          BUILD_AVAIL_GB=$(df /home/runner/work | tail -1 | awk '{print int($4/1024/1024)}')
+          echo "构建目录可用空间: ${BUILD_AVAIL_GB}GB"
+          
+          # 最低要求 40GB 用于完整编译
+          MIN_REQUIRED_GB=40
+          
+          # 使用构建目录的空间作为主要判断依据
+          if [ "$BUILD_AVAIL_GB" -lt "$MIN_REQUIRED_GB" ]; then
+            echo "❌ 错误: 磁盘空间不足!"
+            echo "当前可用: ${BUILD_AVAIL_GB}GB, 最低需要: ${MIN_REQUIRED_GB}GB"
+            echo ""
+            echo "磁盘详情:"
+            df -h
+            echo ""
+            echo "请检查以下可能原因:"
+            echo "1. GitHub Actions Runner 分配的磁盘容量不足"
+            echo "2. 磁盘清理未能释放足够空间"
+            echo "3. 缓存占用过多空间"
+            exit 1
+          fi
+          
+          echo "✅ 磁盘空间检查通过 (可用: ${BUILD_AVAIL_GB}GB)"
+          echo ""
+          echo "完整磁盘信息:"
+          df -h
+          echo "=========================================="
+
+      - name: Check disk space after maximize
+        run: |
+          echo "最大化空间后："
           df -h
 
       - name: Install dependencies
@@ -53,7 +176,17 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ env.CONFIG_FILE }}
-          max-size: 2G
+          max-size: 5G
+          verbose: 2
+
+      - name: Optimize ccache settings
+        run: |
+          # 优化 ccache 配置以提高命中率
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=max_size=5G
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache -z  # 清零统计
 
       - name: Clone or update source code
         run: |
@@ -322,24 +455,67 @@ jobs:
       - name: Download packages
         run: |
           cd $SOURCE_DIR
-          make download -j$(nproc)
-          find dl -size -1024c -exec ls -l {} \;
+          # 使用 8 个并行下载，并重试 3 次失败的下载
+          for i in 1 2 3; do
+            echo "下载尝试 $i/3..."
+            make download -j8 && break
+            echo "部分下载失败，清理无效文件后重试..."
+            find dl -size -1024c -exec rm -f {} \;
+            sleep 5
+          done
+          # 清理不完整的下载文件
           find dl -size -1024c -exec rm -f {} \;
+          echo "下载完成后磁盘空间："
+          df -h
 
       - name: Compile toolchain
         run: |
           cd $SOURCE_DIR
-          make tools/install -j$(nproc) || make tools/install -j1 V=s
-          make toolchain/install -j$(nproc) || make toolchain/install -j1 V=s
+          THREADS=$(($(nproc) + 1))
+          
+          # 启用 ccache
+          export PATH="/usr/lib/ccache:$PATH"
+          
+          echo "编译工具，使用 $THREADS 线程..."
+          make tools/install -j$THREADS || make tools/install -j1 V=s
+          
+          echo "编译工具链，使用 $THREADS 线程..."
+          make toolchain/install -j$THREADS || make toolchain/install -j1 V=s
+          
+          echo "工具链编译后磁盘空间："
+          df -h
+
+      - name: Clean up before firmware compile
+        run: |
+          # 清理不需要的文件以释放空间
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo rm -rf /var/cache/apt/archives/*
+          sudo rm -rf /tmp/*
+          echo "清理后磁盘空间："
+          df -h
 
       - name: Compile firmware
         run: |
           cd $SOURCE_DIR
-          echo "开始编译，使用 $(nproc) 线程..."
+          
+          # 计算最优线程数 (CPU核心数 + 1)
+          THREADS=$(($(nproc) + 1))
+          echo "开始编译，使用 $THREADS 线程..."
+          
+          # 启用 ccache
           export PATH="/usr/lib/ccache:$PATH"
-          make -j$(nproc) || make -j1 V=s
+          
+          # 优化编译参数
+          # -j: 并行任务数
+          # BUILD_LOG=1: 保存编译日志便于调试
+          # IGNORE_ERRORS=m: 忽略模块编译错误继续
+          make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m || make -j1 V=s
+          
+          echo ""
+          echo "========================================"
           echo "ccache 统计信息:"
           ccache -s
+          echo "========================================"
 
       - name: Check disk space
         if: always()
