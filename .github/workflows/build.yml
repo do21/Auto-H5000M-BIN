@@ -98,9 +98,19 @@ jobs:
           ccache --set-config=compression=true --set-config=compression_level=6
           ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
           
-          # 克隆源码
-          git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
-          cd $SOURCE_DIR
+          # 克隆或更新源码
+          if [ -d "$SOURCE_DIR/.git" ]; then
+            echo "源码目录已存在，更新中..."
+            cd $SOURCE_DIR
+            git fetch origin $REPO_BRANCH
+            git reset --hard origin/$REPO_BRANCH
+            git clean -fd
+          else
+            echo "首次克隆源码..."
+            rm -rf $SOURCE_DIR
+            git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
+            cd $SOURCE_DIR
+          fi
           
           # 添加 QModem feed & 更新
           grep -q "qmodem" feeds.conf.default || echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
@@ -109,8 +119,9 @@ jobs:
           # ======== 克隆额外的软件包 ========
           echo "克隆额外软件包..."
           
-          # 克隆 luci-app-adguardhome
-          git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome
+          # 克隆 luci-app-adguardhome (如果不存在)
+          [ ! -d "package/luci-app-adguardhome" ] && \
+            git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome
           
           # ======== 修复依赖 WARNING ========
           echo "修复依赖警告..."
