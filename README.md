@@ -27,7 +27,6 @@
 ### 🌐 网络管理
 
 - **QModem** - 5G/LTE 模组管理（支持 Quectel、Fibocom 等）
-- **HomeProxy** - 代理工具
 - **Mihomo** - 代理客户端
 - **MWAN3** - 多 WAN 负载均衡
 - **UPnP** - 自动端口映射

@@ -255,8 +255,12 @@ jobs:
           CONFIG_PACKAGE_luci-app-adguardhome=y
           CONFIG_PACKAGE_adguardhome=y
           CONFIG_PACKAGE_luci-app-ramfree=y
-          CONFIG_PACKAGE_luci-app-homeproxy=y
           CONFIG_PACKAGE_luci-app-mihomo=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_yq=y
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_ip-full=y
           CONFIG_PACKAGE_kmod-tun=y
           
@@ -299,7 +303,7 @@ jobs:
         run: |
           cd $SOURCE_DIR
           echo "📦 关键包配置状态:"
-          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem|adguardhome|homeproxy|mihomo)=" .config || true
+          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem|adguardhome|mihomo)=" .config || true
 
       - name: Download & Compile
         run: |
