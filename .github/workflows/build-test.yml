@@ -50,6 +50,21 @@ on:
         required: false
         default: 'false'
         type: boolean
+      enable_qmodem_next:
+        description: '启用 QModem Next (新版JS前端)'
+        required: false
+        default: 'true'
+        type: boolean
+      enable_qmodem:
+        description: '启用 QModem (旧版)'
+        required: false
+        default: 'false'
+        type: boolean
+      enable_mwan:
+        description: '启用 MWAN (多WAN负载均衡)'
+        required: false
+        default: 'true'
+        type: boolean
 
 # 权限：允许写入内容（用于创建 release）
 permissions:
@@ -196,13 +211,36 @@ jobs:
             echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
             echo "启用 DockerMan"
           fi
+          if [ "${{ inputs.enable_qmodem_next }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_luci-app-qmodem-next=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_vendor-qmi-wwan=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_ndisc6=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-qmodem_USE_TOM_CUSTOMIZED_QUECTEL_CM=y" >> .config
+            echo "启用 QModem Next (新版JS前端)"
+          fi
+          if [ "${{ inputs.enable_qmodem }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_luci-app-qmodem=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_vendor-qmi-wwan=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_ndisc6=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-qmodem_USE_TOM_CUSTOMIZED_QUECTEL_CM=y" >> .config
+            echo "启用 QModem (旧版)"
+          fi
+          if [ "${{ inputs.enable_mwan }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_luci-app-qmodem-mwan=y" >> .config
+            echo "CONFIG_PACKAGE_mwan3=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-mwan3=y" >> .config
+            echo "启用 MWAN (多WAN负载均衡)"
+          fi
 
           make defconfig || true
       - name: 验证构建配置
         run: |
           cd $SOURCE_DIR
           echo "📦 关键包配置状态:"
-          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem)=" .config || echo "QModem 包未找到"
+          grep -E "CONFIG_PACKAGE_qmodem=" .config || echo "QModem 核心包未找到"
+          if [ "${{ inputs.enable_qmodem_next }}" = "true" ] || [ "${{ inputs.enable_qmodem }}" = "true" ]; then
+            grep -E "CONFIG_PACKAGE_(luci-app-qmodem|luci-app-qmodem-next)=" .config || echo "QModem UI 包未找到"
+          fi
           if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
             grep -E "CONFIG_PACKAGE_(luci-app-adguardhome|adguardhome)=" .config || echo "AdGuardHome 包未找到"
           fi
@@ -223,6 +261,15 @@ jobs:
           fi
           if [ "${{ inputs.enable_dockerman }}" = "true" ]; then
             grep -E "CONFIG_PACKAGE_(luci-app-dockerman|docker)=" .config || echo "DockerMan 包未找到"
+          fi
+          if [ "${{ inputs.enable_qmodem_next }}" = "true" ]; then
+            grep -E "CONFIG_PACKAGE_luci-app-qmodem-next=" .config || echo "QModem Next 包未找到"
+          fi
+          if [ "${{ inputs.enable_qmodem }}" = "true" ]; then
+            grep -E "CONFIG_PACKAGE_luci-app-qmodem=" .config || echo "QModem 包未找到"
+          fi
+          if [ "${{ inputs.enable_mwan }}" = "true" ]; then
+            grep -E "CONFIG_PACKAGE_(luci-app-qmodem-mwan|mwan3)=" .config || echo "MWAN 包未找到"
           fi
       - name: 下载并编译
         run: |
