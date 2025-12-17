@@ -1,3 +1,5 @@
 # Custom feeds for Auto-H5000M-BIN
+# qmodem: Provides QModem packages for modem support
 src-git qmodem https://github.com/FUjr/QModem.git;main
+# mihomo: Provides Mihomo proxy packages
 src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main

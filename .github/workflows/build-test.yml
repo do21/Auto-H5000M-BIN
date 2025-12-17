@@ -1,27 +1,32 @@
+# 构建 ImmortalWrt H5000M 固件的 GitHub Actions 工作流
 name: Build ImmortalWrt H5000M
 
+# 触发条件：手动触发
 on:
   workflow_dispatch:
 
+# 权限：允许写入内容（用于创建 release）
 permissions:
   contents: write
 
+# 环境变量
 env:
-  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
-  REPO_BRANCH: mt798x-mt799x-6.6-mtwifi
-  CONFIG_FILE: mt7987_mt7992.config
-  TZ: Asia/Shanghai
-  SOURCE_DIR: immortalwrt
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10  # ImmortalWrt 源码仓库 URL
+  REPO_BRANCH: mt798x-mt799x-6.6-mtwifi  # 源码分支
+  CONFIG_FILE: mt7987_mt7992.config  # 默认配置文件
+  TZ: Asia/Shanghai  # 时区
+  SOURCE_DIR: immortalwrt  # 源码目录
 
+# 作业定义
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+  build:  # 构建作业
+    runs-on: ubuntu-22.04  # 运行环境
     steps:
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Cache ccache
+      - name: 缓存编译器缓存
         uses: actions/cache@v4
         with:
           path: |
@@ -29,14 +34,7 @@ jobs:
           key: ${{ runner.os }}-ccache-${{ env.CONFIG_FILE }}-${{ hashFiles('**/feeds.conf.default') }}
           restore-keys: |
             ${{ runner.os }}-ccache-${{ env.CONFIG_FILE }}-
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ env.CONFIG_FILE }}
-          max-size: 8G
-          save: true
-
-      - name: Restore build cache
+      - name: 恢复构建缓存
         uses: actions/cache@v4
         with:
           path: |
@@ -49,14 +47,8 @@ jobs:
           key: ${{ runner.os }}-build-${{ env.CONFIG_FILE }}-${{ hashFiles('**/feeds.conf.default') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ env.CONFIG_FILE }}-
-
-      - name: Clone source & setup feeds
+      - name: 克隆源码并设置 feeds
         run: |
-          ccache --set-config=compression=true --set-config=compression_level=6
-          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,locale
-          ccache --set-config=max_size=8G
-          ccache --set-config=depend_mode=true
-
           if [ -d "$SOURCE_DIR/.git" ]; then
             cd $SOURCE_DIR
             git fetch origin $REPO_BRANCH
@@ -68,56 +60,44 @@ jobs:
             cd $SOURCE_DIR
           fi
 
-          # Use repository-level feeds.conf.default if present
           if [ -f "$GITHUB_WORKSPACE/feeds.conf.default" ]; then
             cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
+            echo "使用自定义 feeds.conf.default"
+          else
+            echo "使用默认 feeds.conf.default"
           fi
 
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-          # Clone extra packages if not present
           [ ! -d "package/luci-app-adguardhome" ] && \
             git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome || true
 
-          # Perform a few repository fixes (kept lightweight)
           AGH_LUCI_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
           if [ -f "$AGH_LUCI_SCRIPT" ]; then
             sed -i 's|mv /usr/bin/AdGuardHome/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv /tmp/AdGuardHomeupdate/AdGuardHome_linux_*/AdGuardHome|g' "$AGH_LUCI_SCRIPT" || true
           fi
 
-          # Other lightweight fixes from original workflow
-          rm -rf package/feeds/packages/exim 2>/dev/null || true
-          rm -rf package/feeds/packages/onionshare-cli 2>/dev/null || true
-          rm -rf package/feeds/packages/python-zope-event 2>/dev/null || true
-          rm -rf package/feeds/packages/python-zope-interface 2>/dev/null || true
-
-      - name: Configure build
+          rm -rf package/feeds/packages/exim package/feeds/packages/onionshare-cli package/feeds/packages/python-zope-event package/feeds/packages/python-zope-interface 2>/dev/null || true
+      - name: 配置构建
         run: |
           cd $SOURCE_DIR
           cp -f defconfig/$CONFIG_FILE .config
 
-          # Ensure removal of old modem config entries
-          sed -i '/CONFIG_PACKAGE_luci-app-modem\|CONFIG_PACKAGE_luci-app-3ginfo-lite\|CONFIG_PACKAGE_luci-app-sms-tool/d' .config || true
-
-          # Append extra config from repository if present
           if [ -f "$GITHUB_WORKSPACE/h5000m.extra.config" ]; then
             cat "$GITHUB_WORKSPACE/h5000m.extra.config" >> .config
+            echo "追加了来自 h5000m.extra.config 的额外配置"
+          else
+            echo "未找到额外配置文件，使用默认 .config"
           fi
 
-          sed -i '/CONFIG_PACKAGE_luci-app-wrtbwmon=y/d' .config || true
-          sed -i '/CONFIG_PACKAGE_luci-app-rclone=y/d' .config || true
-          sed -i '/CONFIG_PACKAGE_rclone=y/d' .config || true
-
           make defconfig || true
-
-      - name: Verify build config
+      - name: 验证构建配置
         run: |
           cd $SOURCE_DIR
           echo "📦 关键包配置状态:"
-          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem|adguardhome|mihomo)=" .config || true
-
-      - name: Download & Compile
+          grep -E "CONFIG_PACKAGE_(qmodem|luci-app-qmodem|adguardhome|mihomo)=" .config || echo "某些包在配置中未找到"
+      - name: 下载并编译
         run: |
           cd $SOURCE_DIR
           THREADS=$(($(nproc) + 1))
@@ -125,22 +105,26 @@ jobs:
           for i in 1 2 3; do make download -j16 && break; find dl -size -1024c -delete 2>/dev/null; sleep 3; done
           echo "🔨 开始编译 (${THREADS} 线程)..."
           make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m || make -j1 V=s || true
-
-      - name: Prepare & Upload artifacts
+      - name: 准备并上传产物
         run: |
           mkdir -p artifacts
           find $SOURCE_DIR/bin/targets -type f \( -name "*.bin" -o -name "*.img.gz" \) -exec cp {} artifacts/ \; || true
-          ls -lh artifacts/ || true
-
-      - name: Upload to Actions
+          if [ "$(ls -A artifacts/ 2>/dev/null)" ]; then
+            ls -lh artifacts/
+          else
+            echo "未找到构建产物，跳过上传"
+            exit 1
+          fi
+      - name: 上传到 Actions
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: ImmortalWrt-MT7987-${{ github.run_number }}
           path: artifacts/
           retention-days: 30
-
-      - name: Create Pre-release
+      - name: 创建预发布
         uses: softprops/action-gh-release@v1
+        if: success() && hashFiles('artifacts/*') != ''
         with:
           tag_name: v${{ github.run_number }}
           name: ImmortalWrt MT7987/MT7992 #${{ github.run_number }}
@@ -152,3 +136,15 @@ jobs:
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 保存构建缓存
+        uses: actions/cache@v4
+        if: always()
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/staging_dir/host
+            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+            ${{ env.SOURCE_DIR }}/staging_dir/target-*
+            ${{ env.SOURCE_DIR }}/build_dir/host
+            ${{ env.SOURCE_DIR }}/build_dir/toolchain-*
+          key: ${{ runner.os }}-build-${{ env.CONFIG_FILE }}-${{ hashFiles('**/feeds.conf.default') }}-${{ github.run_id }}
