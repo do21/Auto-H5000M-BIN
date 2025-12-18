@@ -184,6 +184,92 @@ jobs:
           
           echo "✅ Feeds 设置完成"
 
+      - name: 修复依赖（自定义补丁）
+        run: |
+          set -euxo pipefail
+          cd $SOURCE_DIR
+          echo "🔧 依赖修复与补丁应用..."
+
+          echo "克隆额外软件包..."
+          # 克隆 luci-app-adguardhome (如果不存在)
+          [ ! -d "package/luci-app-adguardhome" ] && \
+            git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome || true
+
+          # 修复 luci-app-adguardhome 的安装脚本（/usr/bin/AdGuardHome 路径冲突问题）
+          AGH_LUCI_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
+          if [ -f "$AGH_LUCI_SCRIPT" ]; then
+            # 在移动/复制前先清理并创建正确的目录结构
+            sed -i 's|mv /usr/bin/AdGuardHome/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv /tmp/AdGuardHomeupdate/AdGuardHome_linux_*/AdGuardHome|g' "$AGH_LUCI_SCRIPT" || true
+          fi
+
+          # 修复 AdGuardHome 初始化脚本
+          AGH_LUCI_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
+          if [ -f "$AGH_LUCI_INIT" ]; then
+            # 确保 /usr/bin/AdGuardHome 是目录
+            sed -i '/^#!/a\\
+            [ -f /usr/bin/AdGuardHome ] && rm -f /usr/bin/AdGuardHome && mkdir -p /usr/bin/AdGuardHome' "$AGH_LUCI_INIT" || true
+          fi
+
+          echo "修复依赖警告..."
+
+          # 1. 移除不需要的有问题的包
+          rm -rf package/feeds/packages/exim 2>/dev/null || true
+          rm -rf package/feeds/packages/onionshare-cli 2>/dev/null || true
+          rm -rf package/feeds/packages/python-zope-event 2>/dev/null || true
+          rm -rf package/feeds/packages/python-zope-interface 2>/dev/null || true
+
+          # 2. ndisc6 处理：优先使用源码自带版本，移除 QModem feed 中的重复版本避免冲突
+          # padavanonly 源码在 package/mtk/applications/5g-modem/ndisc 已包含 ndisc6
+          rm -rf package/feeds/qmodem/ndisc6 2>/dev/null || true
+
+          # 3. 修复 kmod-mhi-wwan 依赖 - 修改 qmodem Makefile 移除该依赖
+          QMODEM_MK="package/feeds/qmodem/qmodem/Makefile"
+          if [ -f "$QMODEM_MK" ]; then
+            # 将 kmod-mhi-wwan 依赖改为注释（禁用）
+            sed -i 's/DEPENDS:=.*+kmod-mhi-wwan/# &/g' "$QMODEM_MK" || true
+            sed -i 's/+kmod-mhi-wwan/+PACKAGE_luci-app-qmodem_GENERIC_MHI_PCIe_DRIVER:kmod-mhi-wwan/g' "$QMODEM_MK" || true
+          fi
+
+          # 3b. 移除有问题的依赖包 Makefile 定义或禁用它们
+          rm -rf package/feeds/packages/python-gevent 2>/dev/null || true
+          rm -rf package/feeds/packages/python-twisted 2>/dev/null || true
+
+          # 4. 修复 mt_hwifi 驱动的 kmod-mt_wifi_osal 依赖警告
+          MT_HWIFI_MK="package/mtk/drivers/mt_hwifi/Makefile"
+          if [ -f "$MT_HWIFI_MK" ]; then
+            # 移除或注释掉不存在的 kmod-mt_wifi_osal 依赖
+            sed -i 's/+kmod-mt_wifi_osal//g' "$MT_HWIFI_MK" || true
+          fi
+
+          # 5. 修复 AdGuardHome 安装冲突
+          AGH_INIT="package/feeds/packages/adguardhome/files/etc/init.d/AdGuardHome"
+          if [ -f "$AGH_INIT" ]; then
+            # 添加清理和重建逻辑到初始化脚本
+            sed -i '/^#!/a\\
+            # 清理冲突的 /usr/bin/AdGuardHome 路径\\
+            [ -e /usr/bin/AdGuardHome ] && rm -rf /usr/bin/AdGuardHome\\
+            mkdir -p /usr/bin/AdGuardHome' "$AGH_INIT" || true
+          fi
+
+          # 同时移除包中的冲突文件定义
+          rm -rf package/feeds/packages/adguardhome/files/usr/bin/AdGuardHome 2>/dev/null || true
+
+          echo "依赖修复完成"
+
+      - name: 诊断：单包编译 ndisc6（不影响流水线失败）
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          cd $SOURCE_DIR
+          echo "🔬 现在尝试单包编译 package/feeds/qmodem/ndisc6，以便捕获详细错误信息..."
+          rm -f /tmp/ndisc6_build.log || true
+          if make package/feeds/qmodem/ndisc6/compile V=s -j1 2>&1 | tee /tmp/ndisc6_build.log; then
+            echo "✅ ndisc6 单包编译成功"
+          else
+            echo "❌ ndisc6 单包编译失败，请查看 /tmp/ndisc6_build.log 的详细日志"
+            tail -n 200 /tmp/ndisc6_build.log || true
+          fi
+
       - name: 下载编译依赖 (会缓存)
         run: |
           cd $SOURCE_DIR
