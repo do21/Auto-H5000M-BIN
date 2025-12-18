@@ -108,6 +108,25 @@ jobs:
           key: ${{ runner.os }}-build-${{ env.CONFIG_FILE }}-${{ hashFiles('**/feeds.conf.default') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ env.CONFIG_FILE }}-
+      - name: 准备构建环境
+        run: |
+          # 清理旧的构建目录
+          echo "🧹 清理旧的构建文件..."
+          rm -rf immortalwrt || true
+          rm -rf /tmp/opkg-* || true
+
+          # 检查并清理磁盘空间
+          echo "💾 检查磁盘空间..."
+          df -h || true
+          echo "可用空间: $(df / | tail -1 | awk '{print $4}')"
+
+          # 如果空间不足，清理一些大文件
+          if [ $(df / | tail -1 | awk '{print $4}' | sed 's/G//') -lt 10 ]; then
+            echo "⚠️ 磁盘空间不足，执行深度清理..."
+            docker system prune -f || true
+            rm -rf /tmp/* || true
+            rm -rf ~/.cache/* || true
+          fi
       - name: 克隆源码并设置 feeds
         run: |
           if [ -d "$SOURCE_DIR/.git" ]; then
@@ -313,11 +332,40 @@ jobs:
       - name: 下载并编译
         run: |
           cd $SOURCE_DIR
+
+          # 检查磁盘空间
+          echo "💾 检查磁盘空间..."
+          df -h || true
+          echo "可用空间: $(df / | tail -1 | awk '{print $4}')"
+
+          # 清理可能的损坏文件
+          echo "🧹 清理构建缓存..."
+          find dl -name "*.dl" -size -1024c -delete 2>/dev/null || true
+          find dl -name "*.dl.*" -size -1024c -delete 2>/dev/null || true
+
           THREADS=$(($(nproc) + 1))
           export PATH="/usr/lib/ccache:$PATH"
-          for i in 1 2 3; do make download -j16 && break; find dl -size -1024c -delete 2>/dev/null; sleep 3; done
+
+          # 下载阶段 - 增加重试和错误处理
+          echo "📥 开始下载..."
+          for i in 1 2 3; do
+            echo "下载尝试 $i/3..."
+            if make download -j16; then
+              echo "✅ 下载成功"
+              break
+            else
+              echo "❌ 下载失败，重试中..."
+              find dl -size -1024c -delete 2>/dev/null
+              sleep 5
+            fi
+          done
+
           echo "🔨 开始编译 (${THREADS} 线程)..."
-          make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m || make -j1 V=s || true
+          # 编译阶段 - 减少并行度以避免内存问题
+          if ! make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m; then
+            echo "⚠️ 并行编译失败，尝试单线程编译..."
+            make -j1 V=s || true
+          fi
       - name: 准备并上传产物
         run: |
           mkdir -p artifacts
