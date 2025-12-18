@@ -1,18 +1,14 @@
 name: Build ImmortalWrt H5000M
+
 on:
   schedule:
-    - cron: '0 16 * * 0'
+    - cron: '0 16 * * 0'  # 每周一北京时间 00:00
   workflow_dispatch:
     inputs:
       enable_adguardhome:
         description: '启用 AdGuardHome'
         required: false
         default: true
-        type: boolean
-      enable_homeproxy:
-        description: '启用 HomeProxy'
-        required: false
-        default: false
         type: boolean
       enable_openclash:
         description: '启用 OpenClash'
@@ -34,11 +30,6 @@ on:
         required: false
         default: true
         type: boolean
-      enable_smartdns:
-        description: '启用 SmartDNS'
-        required: false
-        default: false
-        type: boolean
       enable_mosdns:
         description: '启用 MosDNS'
         required: false
@@ -50,12 +41,12 @@ on:
         default: false
         type: boolean
       enable_qmodem_next:
-        description: '启用 QModem Next (新版) - 与旧版互斥'
+        description: '启用 QModem Next (新版)'
         required: false
         default: true
         type: boolean
       enable_qmodem:
-        description: '启用 QModem (旧版) - 与新版互斥'
+        description: '启用 QModem (旧版)'
         required: false
         default: false
         type: boolean
@@ -76,645 +67,302 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
-  # ============================================================================
-  # Job 1: 环境准备 (5-10 分钟, 可并行)
-  # ============================================================================
-  prepare:
+  build:
     runs-on: ubuntu-22.04
-    steps:
-      - name: 环境清理和准备
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          set -euxo pipefail
-          echo "🧹 [准备阶段] 开始清理环境..."
-          df -h /
-
-          # 清理 runner 的诊断缓存（会增长并占满磁盘）
-          sudo rm -rf /home/runner/actions-runner/cached/_diag/* 2>/dev/null || true
-
-          # 删除 Docker 镜像/容器/缓存
-          docker rmi $(docker images -q) 2>/dev/null || true
-          docker system prune -f || true
-          docker image prune -a -f || true
-          docker volume prune -f || true
-
-          # 删除不需要的组件
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android \
-            /opt/ghc /etc/mysql /etc/php /usr/local/share/boost /usr/share/swift \
-            /opt/hostedtoolcache /usr/local/.ghcup /usr/local/graalvm /imagegeneration 2>/dev/null || true
-
-          # 卸载不需要的软件
-          sudo -E apt-get -y purge azure-cli* docker* ghc* zulu* hhvm* llvm* firefox* \
-            google* dotnet* aspnetcore* powershell* openjdk* adoptopenjdk* mysql* php* \
-            mongodb* moby* snap* 2>/dev/null || true
-
-          # 清理缓存
-          sudo apt-get clean && sudo apt-get autoclean && sudo rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-          sudo rm -rf /tmp/* /var/tmp/* ~/.cache/* /var/log/* 2>/dev/null || true
-
-          echo "🔎 列出 /home/runner 下最大的目录（前 25）以便诊断："
-          sudo du -sh /home/runner/* 2>/dev/null | sort -rh | head -n 25 || true
-
-          # 如果可用空间过小则提前失败，避免运行时出现 no space 错误（单位：KB）
-          AVAIL_KB=$(df --output=avail / | tail -n1 | tr -d ' ')
-          echo "✅ 可用磁盘 (KB): $AVAIL_KB"
-          MIN_KB=$((6 * 1024 * 1024))
-          if [ "$AVAIL_KB" -lt "$MIN_KB" ]; then
-            echo "❌ 可用磁盘小于 6GB ($MIN_KB KB)，请清理 runner 或调整缓存策略。"
-            df -h /
-            exit 1
-          fi
-
-          # 安装主机构建依赖（可能需要一段时间）
-          echo "🔧 安装主机构建依赖..."
-          sudo apt-get update || true
-          sudo apt-get install -y build-essential git ccache pkg-config cmake python3 python3-pip libncurses5-dev libssl-dev libgmp3-dev libmbedtls-dev rustc cargo golang-go autoconf automake libtool patch make gcc g++ || true
-
-          echo "✅ 环境清理完成"
-          df -h /
-
-  # ============================================================================
-  # Job 2: 下载源码和编译链 (20-30 分钟, 首次)
-  # ============================================================================
-  download:
-    runs-on: ubuntu-22.04
-    needs: prepare
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.key }}
-      config-hash: ${{ steps.config.outputs.hash }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: 生成缓存键
-        id: cache-key
-        run: echo "key=${{ github.run_id }}-${{ github.ref }}" >> $GITHUB_OUTPUT
-
-      - name: 计算配置哈希
-        id: config
+      - name: 环境准备和缓存设置
         run: |
-          # 计算配置文件的哈希值，用于判断配置是否改变
-          CONFIG_HASH=$(cat h5000m.config feeds.conf.default 2>/dev/null | md5sum | cut -d' ' -f1)
-          echo "hash=$CONFIG_HASH" >> $GITHUB_OUTPUT
-          echo "📋 配置哈希: $CONFIG_HASH"
+          echo "🔧 准备构建环境..."
 
-      - name: 恢复编译工具链缓存 (加速首次)
+          # 基础清理
+          sudo rm -rf /home/runner/actions-runner/cached/_diag/* 2>/dev/null || true
+          docker system prune -f 2>/dev/null || true
+
+          # 检查磁盘空间
+          AVAIL_GB=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
+          echo "💾 可用磁盘空间: ${AVAIL_GB}GB"
+
+          if [ "$AVAIL_GB" -lt 6 ]; then
+            echo "❌ 磁盘空间不足，需要至少6GB"
+            exit 1
+          fi
+
+          # 安装必要依赖
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential git ccache python3 python3-pip \
+            libncurses5-dev libssl-dev libgmp3-dev libmbedtls-dev rustc cargo \
+            golang-go autoconf automake libtool patch make gcc g++
+
+      - name: 设置 ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ env.REPO_BRANCH }}
+          max-size: 8G
+          save: true
+
+      - name: 恢复构建缓存
         uses: actions/cache@v4
         with:
           path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/staging_dir
             ~/.ccache
-            ${{ env.SOURCE_DIR }}/staging_dir/host
-            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
-            ${{ env.SOURCE_DIR }}/staging_dir/target-*
-          key: ${{ runner.os }}-toolchain-${{ env.REPO_BRANCH }}-v1
+          key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default', '**/*.config') }}
           restore-keys: |
-            ${{ runner.os }}-toolchain-${{ env.REPO_BRANCH }}-
-            ${{ runner.os }}-toolchain-
+            ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
 
-      - name: 克隆源码
+      - name: 源码和依赖准备
         run: |
-          echo "📥 [下载阶段] 克隆源码..."
+          # 克隆或更新源码
           if [ -d "$SOURCE_DIR/.git" ]; then
+            echo "📥 更新源码..."
             cd $SOURCE_DIR
             git fetch origin $REPO_BRANCH
             git reset --hard origin/$REPO_BRANCH
             git clean -fd
           else
-            if [ -d "$SOURCE_DIR" ]; then
-              echo "⚠️ $SOURCE_DIR 已存在且不是 git 仓库，先删除..."
-              rm -rf "$SOURCE_DIR"
-            fi
+            echo "📥 克隆源码..."
             git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
           fi
-          echo "✅ 源码克隆完成"
 
-      - name: 设置 feeds
-        run: |
+          # 设置 feeds
           cd $SOURCE_DIR
-          echo "🔄 更新软件源..."
-          
           if [ -f "$GITHUB_WORKSPACE/feeds.conf.default" ]; then
             cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
           fi
-          
-          # 根据输入条件添加 feeds，避免不必要的克隆
-          if [ "${{ inputs.enable_mihomo }}" = "true" ]; then
-            grep -q "mihomo" feeds.conf.default || echo 'src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main' >> feeds.conf.default
+
+          # 根据输入动态添加 feeds
+          if [ "${{ inputs.enable_mihomo }}" = "true" ] && ! grep -q "mihomo" feeds.conf.default; then
+            echo 'src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main' >> feeds.conf.default
           fi
           if [ "${{ inputs.enable_qmodem_next }}" = "true" ] || [ "${{ inputs.enable_qmodem }}" = "true" ]; then
-            grep -q "qmodem" feeds.conf.default || echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
+            if ! grep -q "qmodem" feeds.conf.default; then
+              echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
+            fi
           fi
-          
-          # 更新 feeds，允许部分失败
-          ./scripts/feeds update -a 2>&1 | grep -E "^(Scanning|Updating)" || true
-          ./scripts/feeds install -a -f 2>&1 | tail -5 || true
-          
-          echo "✅ Feeds 设置完成"
 
-      - name: 修复依赖（自定义补丁）
+          # 更新 feeds
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -f
+
+      - name: 修复依赖和补丁
         run: |
-          set -euxo pipefail
           cd $SOURCE_DIR
-          echo "🔧 依赖修复与补丁应用..."
+          echo "🔧 应用补丁和修复依赖..."
 
-          echo "克隆额外软件包..."
-          # 只克隆启用的包，避免不必要的克隆
+          # 下载额外包
           if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
             [ ! -d "package/luci-app-adguardhome" ] && \
               git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome || true
           fi
 
-          # 修复 AdGuardHome 的安装脚本（如果启用）
+          # 修复 AdGuardHome 路径问题
           if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
-            AGH_LUCI_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
-            if [ -f "$AGH_LUCI_SCRIPT" ]; then
-              # 在移动/复制前先清理并创建正确的目录结构
-              sed -i 's|mv /usr/bin/AdGuardHome/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv /tmp/AdGuardHomeupdate/AdGuardHome_linux_*/AdGuardHome|g' "$AGH_LUCI_SCRIPT" || true
-            fi
-
-            # 修复 AdGuardHome 初始化脚本
-            AGH_LUCI_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
-            if [ -f "$AGH_LUCI_INIT" ]; then
-              # 确保 /usr/bin/AdGuardHome 是目录
-              sed -i '/^#!/a\\
-            [ -f /usr/bin/AdGuardHome ] && rm -f /usr/bin/AdGuardHome && mkdir -p /usr/bin/AdGuardHome' "$AGH_LUCI_INIT" || true
-            fi
+            # 修复安装脚本
+            AGH_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
+            [ -f "$AGH_SCRIPT" ] && sed -i 's|mv /usr/bin/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv|g' "$AGH_SCRIPT" || true
           fi
 
-          echo "修复依赖警告..."
+          # 移除问题包
+          rm -rf package/feeds/packages/{exim,onionshare-cli,python-zope-event,python-zope-interface,python-gevent,python-twisted} 2>/dev/null || true
 
-          # 1. 移除不需要的有问题的包
-          rm -rf package/feeds/packages/exim 2>/dev/null || true
-          rm -rf package/feeds/packages/onionshare-cli 2>/dev/null || true
-          rm -rf package/feeds/packages/python-zope-event 2>/dev/null || true
-          rm -rf package/feeds/packages/python-zope-interface 2>/dev/null || true
-
-          # 2. ndisc6 处理：优先使用源码自带版本，移除 QModem feed 中的重复版本避免冲突
-          # padavanonly 源码在 package/mtk/applications/5g-modem/ndisc 已包含 ndisc6
+          # 修复 QModem 冲突
           rm -rf package/feeds/qmodem/ndisc6 2>/dev/null || true
 
-          # 3. 修复 kmod-mhi-wwan 依赖 - 修改 qmodem Makefile 移除该依赖
+          # 修复 kmod-mhi-wwan 依赖
           QMODEM_MK="package/feeds/qmodem/qmodem/Makefile"
           if [ -f "$QMODEM_MK" ]; then
-            # 将 kmod-mhi-wwan 依赖改为注释（禁用）
             sed -i 's/DEPENDS:=.*+kmod-mhi-wwan/# &/g' "$QMODEM_MK" || true
-            sed -i 's/+kmod-mhi-wwan/+PACKAGE_luci-app-qmodem_GENERIC_MHI_PCIe_DRIVER:kmod-mhi-wwan/g' "$QMODEM_MK" || true
           fi
 
-          # 3b. 移除有问题的依赖包 Makefile 定义或禁用它们
-          rm -rf package/feeds/packages/python-gevent 2>/dev/null || true
-          rm -rf package/feeds/packages/python-twisted 2>/dev/null || true
-
-          # 4. 修复 mt_hwifi 驱动的 kmod-mt_wifi_osal 依赖警告
+          # 修复 mt_hwifi 依赖
           MT_HWIFI_MK="package/mtk/drivers/mt_hwifi/Makefile"
           if [ -f "$MT_HWIFI_MK" ]; then
-            # 移除或注释掉不存在的 kmod-mt_wifi_osal 依赖
             sed -i 's/+kmod-mt_wifi_osal//g' "$MT_HWIFI_MK" || true
           fi
 
-          # 5. 修复 AdGuardHome 安装冲突（如果启用）
-          if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
-            AGH_INIT="package/feeds/packages/adguardhome/files/etc/init.d/AdGuardHome"
-            if [ -f "$AGH_INIT" ]; then
-              # 添加清理和重建逻辑到初始化脚本
-              sed -i '/^#!/a\\
-            # 清理冲突的 /usr/bin/AdGuardHome 路径\\
-            [ -e /usr/bin/AdGuardHome ] && rm -rf /usr/bin/AdGuardHome\\
-            mkdir -p /usr/bin/AdGuardHome' "$AGH_INIT" || true
-            fi
+          echo "✅ 依赖修复完成"
 
-            # 同时移除包中的冲突文件定义
-            rm -rf package/feeds/packages/adguardhome/files/usr/bin/AdGuardHome 2>/dev/null || true
-          fi
-
-          echo "依赖修复完成"
-
-      - name: 诊断：单包编译 ndisc6（不影响流水线失败）
-        continue-on-error: true
-        run: |
-          set -euxo pipefail
-          cd $SOURCE_DIR
-          echo "🔬 现在尝试单包编译 package/feeds/qmodem/ndisc6，以便捕获详细错误信息..."
-          rm -f /tmp/ndisc6_build.log || true
-          if make package/feeds/qmodem/ndisc6/compile V=s -j1 2>&1 | tee /tmp/ndisc6_build.log; then
-            echo "✅ ndisc6 单包编译成功"
-          else
-            echo "❌ ndisc6 单包编译失败，请查看 /tmp/ndisc6_build.log 的详细日志"
-            tail -n 200 /tmp/ndisc6_build.log || true
-          fi
-
-      - name: 下载编译依赖 (会缓存)
+      - name: 配置构建
         run: |
           cd $SOURCE_DIR
-          echo "📦 [下载阶段] 下载编译依赖..."
-          
-          for attempt in 1 2 3; do
-            if make download -j16 2>&1 | tail -10; then
-              echo "✅ 依赖下载成功"
-              exit 0
-            fi
-            echo "⚠️  第 $attempt 次下载失败，重试..."
-            find dl -size -1024c -delete 2>/dev/null || true
-            sleep $((attempt * 5))
-          done
-          
-          echo "❌ 依赖下载失败"
-          exit 1
+          echo "⚙️ 配置构建选项..."
 
-      - name: 缓存下载的依赖 (关键!)
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.SOURCE_DIR }}/dl
-            ${{ env.SOURCE_DIR }}/staging_dir/host
-            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
-            ${{ env.SOURCE_DIR }}/staging_dir/target-*
-          key: ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-${{ steps.cache-key.outputs.key }}
-          restore-keys: |
-            ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-
-
-  # ============================================================================
-  # Job 3: 编译固件 (30-90 分钟, 首次; 5-30 分钟, 后续)
-  # ============================================================================
-  build:
-    runs-on: ubuntu-22.04
-    needs: download
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: 恢复缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.SOURCE_DIR }}/dl
-            ${{ env.SOURCE_DIR }}/staging_dir/host
-            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
-            ${{ env.SOURCE_DIR }}/staging_dir/target-*
-          key: ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-${{ needs.download.outputs.cache-key }}
-          restore-keys: |
-            ${{ runner.os }}-downloads-${{ env.REPO_BRANCH }}-
-
-      - name: 恢复 ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ${{ runner.os }}-ccache-${{ env.REPO_BRANCH }}-v1
-          restore-keys: |
-            ${{ runner.os }}-ccache-${{ env.REPO_BRANCH }}-
-
-      - name: 克隆源码
-        run: |
-          if [ ! -d "$SOURCE_DIR/.git" ]; then
-            if [ -d "$SOURCE_DIR" ]; then
-              echo "⚠️ $SOURCE_DIR 已存在且不是 git 仓库，先删除..."
-              rm -rf "$SOURCE_DIR"
-            fi
-            git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
-          fi
-
-      - name: 设置 feeds
-        run: |
-          cd $SOURCE_DIR
-          if [ -f "$GITHUB_WORKSPACE/feeds.conf.default" ]; then
-            cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
-          fi
-          ./scripts/feeds update -a 2>&1 | grep -E "^(Scanning|Updating)" || true
-          ./scripts/feeds install -a -f 2>&1 | tail -3 || true
-
-      - name: 下载基础配置并合并
-        run: |
-          cd $SOURCE_DIR
-          echo "📥 下载基础配置..."
-          
-          curl -fsSL "$CONFIG_URL" -o base.config || {
-            echo "⚠️ 远程配置下载失败，使用本地"
-            [ -f "defconfig/mt7987_mt7992.config" ] && cp defconfig/mt7987_mt7992.config base.config
-          }
-          
-          cat base.config > .config
-          if [ -f "$GITHUB_WORKSPACE/h5000m.config" ]; then
-            cat "$GITHUB_WORKSPACE/h5000m.config" >> .config
-          fi
-          echo "✅ 配置已合并"
-
-      - name: 应用插件配置
-        run: |
-          cd $SOURCE_DIR
-          
           # 验证互斥选项
           if [ "${{ inputs.enable_qmodem_next }}" = "true" ] && [ "${{ inputs.enable_qmodem }}" = "true" ]; then
             echo "❌ 错误: 不能同时启用 QModem Next 和 QModem！"
             exit 1
           fi
-          
+
+          # 下载基础配置
+          curl -fsSL "$CONFIG_URL" -o base.config || {
+            [ -f "defconfig/mt7987_mt7992.config" ] && cp defconfig/mt7987_mt7992.config base.config
+          }
+
+          cat base.config > .config
+
+          # 应用额外配置
+          if [ -f "$GITHUB_WORKSPACE/h5000m.extra.config" ]; then
+            cat "$GITHUB_WORKSPACE/h5000m.extra.config" >> .config
+          fi
+
+          # 根据输入动态配置包
           enable_pkg() { echo "CONFIG_PACKAGE_$1=y" >> .config; }
           disable_pkg() { echo "# CONFIG_PACKAGE_$1 is not set" >> .config; }
-          
+
           # AdGuardHome
-          [ "${{ inputs.enable_adguardhome }}" = "true" ] && {
+          if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
             enable_pkg "luci-app-adguardhome"
             enable_pkg "adguardhome"
-          } || {
+          else
             disable_pkg "luci-app-adguardhome"
             disable_pkg "adguardhome"
-          }
-          
-          # HomeProxy
-          [ "${{ inputs.enable_homeproxy }}" = "true" ] && enable_pkg "luci-app-homeproxy"
-          
+          fi
+
           # OpenClash
           if [ "${{ inputs.enable_openclash }}" = "true" ]; then
             enable_pkg "luci-app-openclash"
-            enable_pkg "bash" "dnsmasq-full" "curl" "ca-bundle" "ip-full"
-            enable_pkg "kmod-nft-tproxy" "luci-compat"
+            enable_pkg "bash"
+            enable_pkg "dnsmasq-full"
+            enable_pkg "curl"
+            enable_pkg "ca-bundle"
+            enable_pkg "ip-full"
+            enable_pkg "kmod-nft-tproxy"
+            enable_pkg "luci-compat"
           else
             disable_pkg "luci-app-openclash"
-            disable_pkg "kmod-nft-tproxy" "ip-full"
           fi
-          
+
           # Mihomo
           [ "${{ inputs.enable_mihomo }}" = "true" ] && {
             enable_pkg "mihomo"
             enable_pkg "luci-app-mihomo"
           }
-          
-          # UPnP
+
+          # 其他包
           [ "${{ inputs.enable_upnp }}" = "true" ] && enable_pkg "luci-app-upnp" || disable_pkg "luci-app-upnp"
-          
-          # VLMCSd
+
           if [ "${{ inputs.enable_vlmcsd }}" = "true" ]; then
-            enable_pkg "vlmcsd" "luci-app-vlmcsd"
+            enable_pkg "vlmcsd"
+            enable_pkg "luci-app-vlmcsd"
           else
-            disable_pkg "vlmcsd" "luci-app-vlmcsd"
+            disable_pkg "vlmcsd"
+            disable_pkg "luci-app-vlmcsd"
           fi
-          
-          # SmartDNS
-          [ "${{ inputs.enable_smartdns }}" = "true" ] && {
-            enable_pkg "smartdns" "luci-app-smartdns"
+
+          [ "${{ inputs.enable_mosdns }}" = "true" ] && {
+            enable_pkg "mosdns"
+            enable_pkg "luci-app-mosdns"
+          } || {
+            disable_pkg "mosdns"
+            disable_pkg "luci-app-mosdns"
           }
-          
-          # MosDNS
-          if [ "${{ inputs.enable_mosdns }}" = "true" ]; then
-            enable_pkg "mosdns" "luci-app-mosdns"
-          else
-            disable_pkg "mosdns" "luci-app-mosdns"
-          fi
-          
-          # DockerMan
           [ "${{ inputs.enable_dockerman }}" = "true" ] && {
-            enable_pkg "docker" "luci-app-dockerman"
+            enable_pkg "docker"
+            enable_pkg "luci-app-dockerman"
           }
-          
+
           # QModem
           if [ "${{ inputs.enable_qmodem_next }}" = "true" ]; then
             enable_pkg "luci-app-qmodem-next"
           elif [ "${{ inputs.enable_qmodem }}" = "true" ]; then
             enable_pkg "luci-app-qmodem"
           fi
-          
+
           # MWAN
           [ "${{ inputs.enable_mwan }}" = "true" ] && {
-            enable_pkg "mwan3" "luci-app-mwan3"
+            enable_pkg "mwan3"
+            enable_pkg "luci-app-mwan3"
           }
-          
-          make defconfig || true
-          echo "✅ 插件配置已应用"
 
-      - name: 验证配置
-        run: |
-          cd $SOURCE_DIR
-          echo "🔍 验证配置..."
-          check_pkg() {
-            grep -q "CONFIG_PACKAGE_$1=y" .config && echo "✅ $2: 启用" || echo "⚠️  $2: 禁用/未配置"
-          }
-          check_pkg "luci-app-adguardhome" "AdGuardHome"
-          check_pkg "luci-app-openclash" "OpenClash"
-          check_pkg "docker" "Docker"
+          make defconfig
+          echo "✅ 配置完成"
 
-      - name: 诊断：主机包单编译（gmp/openssl/mbedtls/golang/rust）
-        continue-on-error: true
-        run: |
-          set -euxo pipefail
-          cd $SOURCE_DIR
-          packages=(
-            "package/libs/gmp"
-            "package/libs/openssl"
-            "package/libs/mbedtls"
-            "package/feeds/packages/golang"
-            "package/feeds/packages/rust"
-          )
-          for p in "${packages[@]}"; do
-            base=$(basename "$p")
-            echo "==== 编译 $p host (V=s) ===="
-            rm -f /tmp/${base}_host_build.log || true
-            if make ${p}/host/compile V=s -j1 2>&1 | tee /tmp/${base}_host_build.log; then
-              echo "✅ $p 编译成功"
-            else
-              echo "❌ $p 编译失败，输出最后 200 行日志："
-              tail -n 200 /tmp/${base}_host_build.log || true
-            fi
-          done
-
-      - name: 保存主机依赖诊断日志
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: host-deps-logs-${{ github.run_number }}
-          path: /tmp/*_host_build.log
-          retention-days: 1
-
-      - name: 编译前磁盘检查
-        run: |
-          set -euxo pipefail
-          echo "🔍 [编译前] 检查磁盘空间..."
-          df -h /
-          AVAIL_KB=$(df --output=avail / | tail -n1 | tr -d ' ')
-          echo "✅ 可用磁盘 (KB): $AVAIL_KB"
-          MIN_KB=$((4 * 1024 * 1024))  # 4GB 阈值
-          if [ "$AVAIL_KB" -lt "$MIN_KB" ]; then
-            echo "❌ 可用磁盘小于 4GB ($MIN_KB KB)，尝试清理多余文件..."
-            # 清理临时文件和缓存
-            sudo rm -rf /tmp/* /var/tmp/* ~/.cache/* 2>/dev/null || true
-            sudo rm -rf ${{ env.SOURCE_DIR }}/build_dir/* ${{ env.SOURCE_DIR }}/staging_dir/target-* ${{ env.SOURCE_DIR }}/bin/targets/* 2>/dev/null || true
-            docker system prune -af || true
-            sudo rm -rf /home/runner/actions-runner/cached/_diag/* 2>/dev/null || true
-            # 重新检查
-            df -h /
-            AVAIL_KB_NEW=$(df --output=avail / | tail -n1 | tr -d ' ')
-            echo "✅ 清理后可用磁盘 (KB): $AVAIL_KB_NEW"
-            if [ "$AVAIL_KB_NEW" -lt "$MIN_KB" ]; then
-              echo "❌ 清理后仍不足，请手动清理 runner。"
-              exit 1
-            fi
-            echo "✅ 清理成功，磁盘空间充足，开始编译"
-          else
-            echo "✅ 磁盘空间充足，开始编译"
-          fi
-
-      - name: 编译固件 (多线程)
+      - name: 编译固件
         run: |
           cd $SOURCE_DIR
           THREADS=$(($(nproc) + 1))
           export PATH="/usr/lib/ccache:$PATH"
-          
-          echo "🔨 [编译阶段] 使用 $THREADS 线程编译..."
+
+          echo "🔨 开始编译 (${THREADS} 线程)..."
           START_TIME=$(date +%s)
-          
-          if make -j$THREADS V=s BUILD_LOG=1 IGNORE_ERRORS=m 2>&1 | tee /tmp/build.log | tail -30; then
+
+          # 下载依赖
+          if ! make download -j$(($THREADS * 2)); then
+            echo "⚠️ 下载失败，清理重试..."
+            find dl -size -1024c -delete 2>/dev/null || true
+            make download -j$(($THREADS * 2))
+          fi
+
+          # 编译
+          if make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m; then
             END_TIME=$(date +%s)
             DURATION=$((END_TIME - START_TIME))
             echo "✅ 编译成功 (耗时: ${DURATION}s)"
           else
-            echo "⚠️ 并行编译失败，尝试单线程编译..."
-            if make -j1 V=s 2>&1 | tee /tmp/build_single.log | tail -50; then
-              echo "✅ 单线程编译成功"
-            else
+            echo "⚠️ 并行编译失败，尝试单线程..."
+            make -j1 V=s || {
               echo "❌ 编译失败"
-              tail -100 /tmp/build_single.log
               exit 1
-            fi
+            }
           fi
 
-      - name: 缓存前磁盘检查
+      - name: 收集和上传产物
         run: |
-          set -euxo pipefail
-          echo "🔍 [缓存前] 检查磁盘空间..."
-          df -h /
-          AVAIL_KB=$(df --output=avail / | tail -n1 | tr -d ' ')
-          echo "✅ 可用磁盘 (KB): $AVAIL_KB"
-          MIN_KB=$((3 * 1024 * 1024))  # 3GB 阈值，缓存前更严格
-          if [ "$AVAIL_KB" -lt "$MIN_KB" ]; then
-            echo "❌ 可用磁盘小于 3GB ($MIN_KB KB)，尝试清理多余文件..."
-            # 清理临时文件和缓存
-            sudo rm -rf /tmp/* /var/tmp/* ~/.cache/* 2>/dev/null || true
-            sudo rm -rf ${{ env.SOURCE_DIR }}/build_dir/* ${{ env.SOURCE_DIR }}/staging_dir/target-* ${{ env.SOURCE_DIR }}/bin/targets/* 2>/dev/null || true
-            docker system prune -af || true
-            sudo rm -rf /home/runner/actions-runner/cached/_diag/* 2>/dev/null || true
-            # 重新检查
-            df -h /
-            AVAIL_KB_NEW=$(df --output=avail / | tail -n1 | tr -d ' ')
-            echo "✅ 清理后可用磁盘 (KB): $AVAIL_KB_NEW"
-            if [ "$AVAIL_KB_NEW" -lt "$MIN_KB" ]; then
-              echo "❌ 清理后仍不足，请手动清理 runner。"
-              exit 1
-            fi
-            echo "✅ 清理成功，磁盘空间充足，开始缓存"
-          else
-            echo "✅ 磁盘空间充足，开始缓存"
-          fi
-
-      - name: 保存编译缓存
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.SOURCE_DIR }}/staging_dir/host
-            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
-            ${{ env.SOURCE_DIR }}/staging_dir/target-*
-            # 全部缓存 staging_dir 以加速后续构建
-          key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ needs.download.outputs.cache-key }}
-
-      - name: 编译后清理 (释放磁盘)
-        if: always()
-        run: |
-          set -euxo pipefail
-          echo "🔧 [清理] 释放磁盘空间..."
-          # 删除构建临时目录和 target（target-* 通常很大，由缓存管理）
-          rm -rf ${{ env.SOURCE_DIR }}/build_dir/* ${{ env.SOURCE_DIR }}/staging_dir/target-* ${{ env.SOURCE_DIR }}/bin/targets/* 2>/dev/null || true
-          # 清理 docker
-          docker system prune -af || true
-          # 清理 runner 储存的诊断日志
-          sudo rm -rf /home/runner/actions-runner/cached/_diag/* 2>/dev/null || true
-          df -h
-
-      - name: 上传编译结果
-        uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: build-result-${{ github.run_number }}
-          path: ${{ env.SOURCE_DIR }}/bin
-          retention-days: 1
-
-  # ============================================================================
-  # Job 4: 打包和发布 (5-10 分钟)
-  # ============================================================================
-  package:
-    runs-on: ubuntu-22.04
-    needs: build
-    if: success()
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: 下载编译结果
-        uses: actions/download-artifact@v4
-        with:
-          name: build-result-${{ github.run_number }}
-          path: ${{ env.SOURCE_DIR }}/bin
-
-      - name: 打包产物
-        run: |
-          mkdir -p artifacts
           cd $SOURCE_DIR
-          
+
           if [ ! -d "bin/targets" ]; then
             echo "❌ 未找到编译输出"
             exit 1
           fi
-          
-          echo "📦 收集产物..."
-          find bin/targets -type f \( -name "*.bin" -o -name "*.img.gz" \) -exec cp {} $GITHUB_WORKSPACE/artifacts/ \; 2>/dev/null || true
-          
+
+          mkdir -p $GITHUB_WORKSPACE/artifacts
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img.gz" \) -exec cp {} $GITHUB_WORKSPACE/artifacts/ \;
+
           if [ -z "$(ls -A $GITHUB_WORKSPACE/artifacts/ 2>/dev/null)" ]; then
             echo "❌ 没有找到产物文件"
             exit 1
           fi
-          
-          echo "✅ 产物收集完成:"
-          cd $GITHUB_WORKSPACE/artifacts
-          ls -lh
 
-      - name: 生成产物清单
-        run: |
-          cat > $GITHUB_WORKSPACE/artifacts/MANIFEST.txt << 'EOF'
+          # 生成清单
+          cat > $GITHUB_WORKSPACE/artifacts/MANIFEST.txt << EOF
           ╔════════════════════════════════════════════════╗
           ║    ImmortalWrt H5000M 固件构建信息             ║
           ╚════════════════════════════════════════════════╝
-          
+
           📅 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
           🔗 运行 ID: ${{ github.run_id }}
           🏷️  Build #: ${{ github.run_number }}
-          
+
           ⚙️ 启用的功能:
+          • AdGuardHome:   ${{ inputs.enable_adguardhome }}
+          • OpenClash:     ${{ inputs.enable_openclash }}
+          • Mihomo:        ${{ inputs.enable_mihomo }}
+          • UPnP:          ${{ inputs.enable_upnp }}
+          • VLMCSd:        ${{ inputs.enable_vlmcsd }}
+          • MosDNS:        ${{ inputs.enable_mosdns }}
+          • DockerMan:     ${{ inputs.enable_dockerman }}
+          • QModem Next:   ${{ inputs.enable_qmodem_next }}
+          • QModem:        ${{ inputs.enable_qmodem }}
+          • MWAN:          ${{ inputs.enable_mwan }}
+
+          📦 产物文件:
           EOF
-          
-          echo "  • AdGuardHome:  ${{ inputs.enable_adguardhome }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • HomeProxy:    ${{ inputs.enable_homeproxy }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • OpenClash:    ${{ inputs.enable_openclash }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • Mihomo:       ${{ inputs.enable_mihomo }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • UPnP:         ${{ inputs.enable_upnp }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • VLMCSd:       ${{ inputs.enable_vlmcsd }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • SmartDNS:     ${{ inputs.enable_smartdns }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • MosDNS:       ${{ inputs.enable_mosdns }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • DockerMan:    ${{ inputs.enable_dockerman }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • QModem Next:  ${{ inputs.enable_qmodem_next }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • QModem:       ${{ inputs.enable_qmodem }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "  • MWAN:         ${{ inputs.enable_mwan }}" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          
-          echo "" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
-          echo "📦 产物文件:" >> $GITHUB_WORKSPACE/artifacts/MANIFEST.txt
+
           cd $GITHUB_WORKSPACE/artifacts
           ls -lh | grep -v "^total" | awk '{print "  • " $9 " (" $5 ")"}' >> MANIFEST.txt
 
-      - name: 上传产物
+          echo "✅ 产物收集完成:"
+          ls -lh
+
+      - name: 上传构建结果
         uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: ImmortalWrt-H5000M-${{ github.run_number }}
           path: artifacts/
@@ -728,17 +376,20 @@ jobs:
           name: ImmortalWrt H5000M #${{ github.run_number }}
           body: |
             🎉 **ImmortalWrt H5000M 固件已构建完成**
-            
-            📅 时间: ${{ github.event.repository.updated_at }}
-            
+
+            📅 时间: $(date '+%Y-%m-%d %H:%M:%S')
+            🔗 运行 ID: ${{ github.run_id }}
+
             **⚙️ 启用的功能:**
             - AdGuardHome: ${{ inputs.enable_adguardhome }}
             - OpenClash: ${{ inputs.enable_openclash }}
             - Mihomo: ${{ inputs.enable_mihomo }}
+            - UPnP: ${{ inputs.enable_upnp }}
+            - VLMCSd: ${{ inputs.enable_vlmcsd }}
             - MosDNS: ${{ inputs.enable_mosdns }}
             - Docker: ${{ inputs.enable_dockerman }}
             - MWAN: ${{ inputs.enable_mwan }}
-            
+
             💾 下载产物: 见下方 Artifacts
             📋 详细信息: 见 MANIFEST.txt
           prerelease: false

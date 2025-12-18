@@ -1,0 +1,681 @@
+name: Build ImmortalWrt H5000M (Ultimate)
+
+on:
+  schedule:
+    - cron: '0 16 * * 0'  # 每周一北京时间 00:00
+  workflow_dispatch:
+    inputs:
+      # 核心功能开关
+      enable_adguardhome:
+        description: '启用 AdGuardHome'
+        required: false
+        default: true
+        type: boolean
+      enable_openclash:
+        description: '启用 OpenClash'
+        required: false
+        default: true
+        type: boolean
+      enable_mihomo:
+        description: '启用 Mihomo'
+        required: false
+        default: false
+        type: boolean
+      enable_upnp:
+        description: '启用 UPnP'
+        required: false
+        default: true
+        type: boolean
+      enable_vlmcsd:
+        description: '启用 VLMCSd'
+        required: false
+        default: true
+        type: boolean
+      enable_mosdns:
+        description: '启用 MosDNS'
+        required: false
+        default: true
+        type: boolean
+      enable_dockerman:
+        description: '启用 DockerMan'
+        required: false
+        default: false
+        type: boolean
+      enable_qmodem_next:
+        description: '启用 QModem Next (新版)'
+        required: false
+        default: true
+        type: boolean
+      enable_qmodem:
+        description: '启用 QModem (旧版)'
+        required: false
+        default: false
+        type: boolean
+      enable_mwan:
+        description: '启用 MWAN (多WAN负载均衡)'
+        required: false
+        default: true
+        type: boolean
+
+      # 智能控制参数
+      build_mode:
+        description: '构建模式'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+        - auto  # 自动选择最优模式
+        - fast  # 快速模式（增量构建）
+        - full  # 完整模式（重新构建）
+        - parallel  # 并行模式（多Job）
+
+      clean_level:
+        description: '清理级别'
+        required: false
+        default: 'smart'
+        type: choice
+        options:
+        - smart  # 智能清理
+        - minimal  # 最小清理
+        - full  # 完全清理
+        - none  # 不清理
+
+      # 高级选项
+      enable_cache_optimization:
+        description: '启用缓存优化'
+        required: false
+        default: true
+        type: boolean
+      enable_parallel_tasks:
+        description: '启用任务并行'
+        required: false
+        default: true
+        type: boolean
+      max_build_time:
+        description: '最大构建时间(分钟)'
+        required: false
+        default: 120
+        type: number
+
+permissions:
+  contents: write
+
+env:
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
+  REPO_BRANCH: mt798x-mt799x-6.6-mtwifi
+  CONFIG_URL: https://raw.githubusercontent.com/padavanonly/immortalwrt-mt798x-6.6/refs/heads/mt798x-mt799x-6.6-mtwifi/defconfig/mt7987_mt7992.config
+  SOURCE_DIR: immortalwrt
+  TZ: Asia/Shanghai
+  BUILD_ID: ${{ github.run_id }}
+
+jobs:
+  # Job 1: 智能分析和决策
+  analyze:
+    name: 🧠 智能分析
+    runs-on: ubuntu-22.04
+    outputs:
+      # 缓存状态
+      cache-hit-dl: ${{ steps.cache-dl.outputs.cache-hit }}
+      cache-hit-toolchain: ${{ steps.cache-toolchain.outputs.cache-hit }}
+      cache-hit-ccache: ${{ steps.cache-ccache.outputs.cache-hit }}
+
+      # 构建决策
+      build-strategy: ${{ steps.decide.outputs.strategy }}
+      use-parallel: ${{ steps.decide.outputs.use-parallel }}
+      use-incremental: ${{ steps.decide.outputs.use-incremental }}
+      clean-level: ${{ steps.decide.outputs.clean-level }}
+
+      # 性能参数
+      optimal-threads: ${{ steps.performance.outputs.threads }}
+      estimated-time: ${{ steps.performance.outputs.estimated-time }}
+
+      # 配置哈希
+      config-hash: ${{ steps.config.outputs.hash }}
+      needs-rebuild: ${{ steps.config.outputs.needs-rebuild }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 计算配置哈希
+        id: config
+        run: |
+          CONFIG_STRING="${{ inputs.enable_adguardhome }}${{ inputs.enable_openclash }}${{ inputs.enable_mihomo }}"
+          CONFIG_STRING="${CONFIG_STRING}${{ inputs.enable_upnp }}${{ inputs.enable_vlmcsd }}${{ inputs.enable_mosdns }}"
+          CONFIG_STRING="${CONFIG_STRING}${{ inputs.enable_dockerman }}${{ inputs.enable_qmodem_next }}${{ inputs.enable_qmodem }}"
+          CONFIG_STRING="${CONFIG_STRING}${{ inputs.enable_mwan }}${{ inputs.build_mode }}${{ inputs.clean_level }}"
+
+          HASH=$(echo "$CONFIG_STRING" | md5sum | cut -d' ' -f1)
+          echo "hash=$HASH" >> $GITHUB_OUTPUT
+
+          # 检查是否需要重建
+          if [ "${{ inputs.build_mode }}" = "full" ] || [ "${{ inputs.clean_level }}" = "full" ]; then
+            echo "needs-rebuild=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs-rebuild=false" >> $GITHUB_OUTPUT
+          fi
+
+          echo "📋 配置哈希: $HASH"
+
+      - name: 检查缓存状态
+        id: check-cache
+        run: |
+          echo "🔍 检查缓存状态..."
+
+          # 模拟缓存检查（实际会在后续步骤中进行）
+          echo "cache-status=checking" >> $GITHUB_OUTPUT
+
+      - name: 缓存检查 - 下载文件
+        uses: actions/cache@v4
+        id: cache-dl
+        with:
+          path: ${{ env.SOURCE_DIR }}/dl
+          key: ${{ runner.os }}-dl-v3-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
+          restore-keys: |
+            ${{ runner.os }}-dl-v3-${{ env.REPO_BRANCH }}-
+
+      - name: 缓存检查 - Toolchain
+        uses: actions/cache@v4
+        id: cache-toolchain
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/staging_dir/host
+            ${{ env.SOURCE_DIR }}/staging_dir/toolchain-*
+          key: ${{ runner.os }}-toolchain-v3-${{ env.REPO_BRANCH }}
+          restore-keys: |
+            ${{ runner.os }}-toolchain-v3-${{ env.REPO_BRANCH }}-
+
+      - name: 缓存检查 - ccache
+        uses: actions/cache@v4
+        id: cache-ccache
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-v3-${{ env.REPO_BRANCH }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-v3-${{ env.REPO_BRANCH }}-
+
+      - name: 智能决策
+        id: decide
+        run: |
+          CACHE_HIT_COUNT=0
+          [ "${{ steps.cache-dl.outputs.cache-hit }}" = "true" ] && ((CACHE_HIT_COUNT++))
+          [ "${{ steps.cache-toolchain.outputs.cache-hit }}" = "true" ] && ((CACHE_HIT_COUNT++))
+          [ "${{ steps.cache-ccache.outputs.cache-hit }}" = "true" ] && ((CACHE_HIT_COUNT++))
+
+          echo "📊 缓存命中: $CACHE_HIT_COUNT/3"
+
+          # 智能决策逻辑
+          if [ "${{ inputs.build_mode }}" != "auto" ]; then
+            # 用户手动指定模式
+            STRATEGY="${{ inputs.build_mode }}"
+          elif [ $CACHE_HIT_COUNT -ge 2 ] && [ "${{ steps.config.outputs.needs-rebuild }}" = "false" ]; then
+            # 缓存良好，使用并行模式
+            STRATEGY="parallel"
+          elif [ $CACHE_HIT_COUNT -ge 1 ] && [ "${{ steps.config.outputs.needs-rebuild }}" = "false" ]; then
+            # 部分缓存，使用快速模式
+            STRATEGY="fast"
+          else
+            # 缓存不佳或需要重建，使用完整模式
+            STRATEGY="full"
+          fi
+
+          echo "strategy=$STRATEGY" >> $GITHUB_OUTPUT
+
+          # 决定是否使用并行
+          if [ "$STRATEGY" = "parallel" ] && [ "${{ inputs.enable_parallel_tasks }}" = "true" ]; then
+            echo "use-parallel=true" >> $GITHUB_OUTPUT
+          else
+            echo "use-parallel=false" >> $GITHUB_OUTPUT
+          fi
+
+          # 决定是否使用增量
+          if [ "$STRATEGY" != "full" ] && [ "${{ steps.config.outputs.needs-rebuild }}" = "false" ]; then
+            echo "use-incremental=true" >> $GITHUB_OUTPUT
+          else
+            echo "use-incremental=false" >> $GITHUB_OUTPUT
+          fi
+
+          # 决定清理级别
+          if [ "${{ inputs.clean_level }}" != "smart" ]; then
+            echo "clean-level=${{ inputs.clean_level }}" >> $GITHUB_OUTPUT
+          elif [ $CACHE_HIT_COUNT -eq 0 ]; then
+            echo "clean-level=none" >> $GITHUB_OUTPUT
+          else
+            echo "clean-level=minimal" >> $GITHUB_OUTPUT
+          fi
+
+          echo "🎯 构建策略: $STRATEGY"
+          echo "🔄 并行模式: $(echo $use_parallel)"
+          echo "⚡ 增量模式: $(echo $use_incremental)"
+
+      - name: 性能优化参数
+        id: performance
+        run: |
+          # 根据可用资源计算最优线程数
+          AVAILABLE_CORES=$(nproc)
+          AVAILABLE_MEM=$(free -g | awk '/Mem:/ {print $7}')
+
+          if [ "$AVAILABLE_MEM" -gt 12 ]; then
+            # 内存充足，可以使用更多线程
+                THREADS=$((AVAILABLE_CORES * 2))
+          elif [ "$AVAILABLE_MEM" -gt 6 ]; then
+            # 内存适中
+                THREADS=$((AVAILABLE_CORES + 1))
+          else
+            # 内存有限，减少线程数
+                THREADS=$AVAILABLE_CORES
+          fi
+
+          echo "threads=$THREADS" >> $GITHUB_OUTPUT
+
+          # 估算构建时间
+          if [ "${{ steps.decide.outputs.strategy }}" = "full" ]; then
+            ESTIMATED_TIME=90
+          elif [ "${{ steps.decide.outputs.strategy }}" = "parallel" ]; then
+            ESTIMATED_TIME=30
+          else
+            ESTIMATED_TIME=45
+          fi
+
+          echo "estimated-time=$ESTIMATED_TIME" >> $GITHUB_OUTPUT
+
+          echo "💻 最优线程数: $THREADS"
+          echo "⏱️ 预计时间: ${ESTIMATED_TIME}分钟"
+
+  # Job 2: 源码和依赖准备（并行执行）
+  prepare:
+    name: 📦 准备资源
+    runs-on: ubuntu-22.04
+    needs: analyze
+    if: always() && needs.analyze.result == 'success'
+    strategy:
+      matrix:
+        task: [source, deps, environment]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 恢复缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/staging_dir
+            ~/.ccache
+          key: ${{ runner.os }}-prepare-v3-${{ env.REPO_BRANCH }}-${{ needs.analyze.outputs.config-hash }}
+          restore-keys: |
+            ${{ runner.os }}-prepare-v3-${{ env.REPO_BRANCH }}-
+
+      - name: 执行任务
+        run: |
+          case "${{ matrix.task }}" in
+            "source")
+              echo "📥 准备源码..."
+              if [ ! -d "$SOURCE_DIR/.git" ]; then
+                git clone -b $REPO_BRANCH --single-branch --depth=1 $REPO_URL $SOURCE_DIR
+              else
+                cd $SOURCE_DIR
+                git fetch origin $REPO_BRANCH
+                git reset --hard origin/$REPO_BRANCH
+              fi
+              ;;
+            "deps")
+              echo "📦 准备依赖..."
+              cd $SOURCE_DIR 2>/dev/null || mkdir -p $SOURCE_DIR && cd $SOURCE_DIR
+
+              # 并行更新feeds
+              if [ -f "feeds.conf.default" ] || [ -f "../feeds.conf.default" ]; then
+                [ -f "../feeds.conf.default" ] && cp ../feeds.conf.default ./feeds.conf.default
+                ./scripts/feeds update -a &
+                ./scripts/feeds install -a -f &
+                wait
+              fi
+              ;;
+            "environment")
+              echo "🔧 准备环境..."
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends \
+                build-essential git ccache python3 python3-pip \
+                libncurses5-dev libssl-dev libgmp3-dev libmbedtls-dev \
+                rustc cargo golang-go autoconf automake libtool
+              ;;
+          esac
+
+  # Job 3: 智能构建（根据策略自动选择）
+  build:
+    name: 🔨 智能构建
+    runs-on: ubuntu-22.04
+    needs: [analyze, prepare]
+    if: always() && needs.analyze.result == 'success' && needs.prepare.result == 'success'
+    strategy:
+      matrix:
+        stage: ${{ fromJson(needs.analyze.outputs.use-parallel) == 'true' && '["target", "packages"]' || '["full"]' }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 恢复完整缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/staging_dir
+            ~/.ccache
+          key: ${{ runner.os }}-build-v3-${{ env.REPO_BRANCH }}-${{ needs.analyze.outputs.config-hash }}
+          restore-keys: |
+            ${{ runner.os }}-build-v3-${{ env.REPO_BRANCH }}-
+
+      - name: 环境准备
+        run: |
+          # 智能清理
+          case "${{ needs.analyze.outputs.clean-level }}" in
+            "full")
+              make clean || true
+              rm -rf ${{ env.SOURCE_DIR }}/build_dir/* || true
+              ;;
+            "minimal")
+              rm -rf ${{ env.SOURCE_DIR }}/build_dir/target-* || true
+              ;;
+            "none")
+              echo "跳过清理"
+              ;;
+          esac
+
+          # 设置ccache
+          export PATH="/usr/lib/ccache:$PATH"
+          ccache --set-config=max_size=8G
+          ccache --set-config=compression=true
+
+          # 安装依赖
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential
+
+      - name: 配置构建
+        run: |
+          cd $SOURCE_DIR
+
+          # 下载基础配置
+          curl -fsSL "$CONFIG_URL" -o base.config || {
+            [ -f "defconfig/mt7987_mt7992.config" ] && cp defconfig/mt7987_mt7992.config base.config
+          }
+
+          cat base.config > .config
+
+          # 应用额外配置
+          if [ -f "$GITHUB_WORKSPACE/h5000m.extra.config" ]; then
+            cat "$GITHUB_WORKSPACE/h5000m.extra.config" >> .config
+          fi
+
+          # 配置函数
+          enable_pkg() { echo "CONFIG_PACKAGE_$1=y" >> .config; }
+          disable_pkg() { echo "# CONFIG_PACKAGE_$1 is not set" >> .config; }
+
+          # 应用用户配置
+          [ "${{ inputs.enable_adguardhome }}" = "true" ] && { enable_pkg "luci-app-adguardhome"; enable_pkg "adguardhome"; }
+          [ "${{ inputs.enable_openclash }}" = "true" ] && enable_pkg "luci-app-openclash"
+          [ "${{ inputs.enable_mihomo }}" = "true" ] && { enable_pkg "mihomo"; enable_pkg "luci-app-mihomo"; }
+          [ "${{ inputs.enable_upnp }}" = "true" ] && enable_pkg "luci-app-upnp" || disable_pkg "luci-app-upnp"
+          [ "${{ inputs.enable_vlmcsd }}" = "true" ] && { enable_pkg "vlmcsd"; enable_pkg "luci-app-vlmcsd"; }
+          [ "${{ inputs.enable_mosdns }}" = "true" ] && { enable_pkg "mosdns"; enable_pkg "luci-app-mosdns"; }
+          [ "${{ inputs.enable_dockerman }}" = "true" ] && { enable_pkg "docker"; enable_pkg "luci-app-dockerman"; }
+          [ "${{ inputs.enable_qmodem_next }}" = "true" ] && enable_pkg "luci-app-qmodem-next"
+          [ "${{ inputs.enable_qmodem }}" = "true" ] && enable_pkg "luci-app-qmodem"
+          [ "${{ inputs.enable_mwan }}" = "true" ] && { enable_pkg "mwan3"; enable_pkg "luci-app-mwan3"; }
+
+          make defconfig
+
+      - name: 应用修复补丁
+        run: |
+          cd $SOURCE_DIR
+          echo "🔧 应用修复补丁..."
+
+          # 并行执行修复任务
+          {
+            # AdGuardHome 相关
+            [ "${{ inputs.enable_adguardhome }}" = "true" ] && [ ! -d "package/luci-app-adguardhome" ] && \
+              git clone --depth=1 https://github.com/rufengsuixing/luci-app-adguardhome.git package/luci-app-adguardhome || true
+          } &
+
+          {
+            # 移除问题包
+            rm -rf package/feeds/packages/{exim,onionshare-cli,python-zope-event,python-zope-interface} 2>/dev/null || true
+          } &
+
+          {
+            # QModem 修复
+            rm -rf package/feeds/qmodem/ndisc6 2>/dev/null || true
+            QMODEM_MK="package/feeds/qmodem/qmodem/Makefile"
+            [ -f "$QMODEM_MK" ] && sed -i 's/DEPENDS:=.*+kmod-mhi-wwan/# &/g' "$QMODEM_MK" || true
+          } &
+
+          wait
+
+      - name: 智能编译
+        timeout-minutes: ${{ inputs.max_build_time }}
+        run: |
+          cd $SOURCE_DIR
+          export PATH="/usr/lib/ccache:$PATH"
+          THREADS=${{ needs.analyze.outputs.optimal-threads }}
+
+          echo "🔨 开始构建 (模式: ${{ needs.analyze.outputs.build-strategy }})..."
+          START_TIME=$(date +%s)
+
+          # 下载依赖（如果需要）
+          if [ ! "$(ls -A dl 2>/dev/null)" ] || [ "${{ needs.analyze.outputs.use-incremental }}" != "true" ]; then
+            echo "📦 下载依赖..."
+            make download -j$((THREADS * 2)) || {
+              find dl -size -1024c -delete 2>/dev/null || true
+              make download -j$((THREADS * 2))
+            }
+          fi
+
+          # 根据策略编译
+          case "${{ matrix.stage }}" in
+            "target")
+              echo "🎯 编译target..."
+              make -j$THREADS target/compile BUILD_LOG=1
+              ;;
+            "packages")
+              echo "📦 编译packages..."
+              make -j$THREADS package/compile BUILD_LOG=1
+              ;;
+            "full"|*)
+              echo "🔨 完整编译..."
+              if [ "${{ needs.analyze.outputs.use-incremental }}" = "true" ]; then
+                make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m || {
+                  echo "⚠️ 增量编译失败，尝试完整编译..."
+                  make -j$THREADS BUILD_LOG=1
+                }
+              else
+                make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m || {
+                  echo "⚠️ 并行编译失败，尝试单线程..."
+                  make -j1 V=s || {
+                    echo "❌ 编译失败"
+                    exit 1
+                  }
+                }
+              fi
+              ;;
+          esac
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          echo "✅ 编译完成 (耗时: ${DURATION}s)"
+
+      - name: 上传构建缓存
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.SOURCE_DIR }}/dl
+            ${{ env.SOURCE_DIR }}/staging_dir
+            ~/.ccache
+          key: ${{ runner.os }}-build-v3-${{ env.REPO_BRANCH }}-${{ needs.analyze.outputs.config-hash }}-${{ github.run_id }}
+
+  # Job 4: 产物收集和发布
+  package:
+    name: 📦 发布产物
+    runs-on: ubuntu-22.04
+    needs: [analyze, build]
+    if: always() && (needs.analyze.result == 'success') && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        if: needs.build.result == 'success'
+        continue-on-error: true
+        with:
+          pattern: build-result-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: 收集本地产物
+        run: |
+          cd $SOURCE_DIR 2>/dev/null || { echo "源码目录不存在"; exit 1; }
+
+          if [ ! -d "bin/targets" ]; then
+            echo "❌ 未找到编译输出"
+            exit 1
+          fi
+
+          mkdir -p $GITHUB_WORKSPACE/artifacts
+          find bin/targets -type f \( -name "*.bin" -o -name "*.img.gz" \) -exec cp {} $GITHUB_WORKSPACE/artifacts/ \;
+
+      - name: 生成详细清单
+        run: |
+          cat > $GITHUB_WORKSPACE/artifacts/MANIFEST.txt << EOF
+          ╔════════════════════════════════════════════════╗
+          ║    ImmortalWrt H5000M 智能构建报告             ║
+          ╚════════════════════════════════════════════════╝
+
+          📅 构建时间: $(date '+%Y-%m-%d %H:%M:%S')
+          🔗 运行 ID: ${{ github.run_id }}
+          🏷️  Build #: ${{ github.run_number }}
+
+          🎯 构建策略: ${{ needs.analyze.outputs.build-strategy }}
+          🔄 并行模式: ${{ needs.analyze.outputs.use-parallel }}
+          ⚡ 增量模式: ${{ needs.analyze.outputs.use-incremental }}
+          💾 清理级别: ${{ needs.analyze.outputs.clean-level }}
+          🔧 优化线程: ${{ needs.analyze.outputs.optimal-threads }}
+
+          📊 缓存状态:
+          • DL缓存: ${{ needs.analyze.outputs.cache-hit-dl == 'true' && '✅ 命中' || '❌ 未命中' }}
+          • Toolchain缓存: ${{ needs.analyze.outputs.cache-hit-toolchain == 'true' && '✅ 命中' || '❌ 未命中' }}
+          • ccache缓存: ${{ needs.analyze.outputs.cache-hit-ccache == 'true' && '✅ 命中' || '❌ 未命中' }}
+
+          ⚙️ 启用的功能:
+          • AdGuardHome: ${{ inputs.enable_adguardhome }}
+          • OpenClash: ${{ inputs.enable_openclash }}
+          • Mihomo: ${{ inputs.enable_mihomo }}
+          • UPnP: ${{ inputs.enable_upnp }}
+          • VLMCSd: ${{ inputs.enable_vlmcsd }}
+          • MosDNS: ${{ inputs.enable_mosdns }}
+          • DockerMan: ${{ inputs.enable_dockerman }}
+          • QModem Next: ${{ inputs.enable_qmodem_next }}
+          • QModem: ${{ inputs.enable_qmodem }}
+          • MWAN: ${{ inputs.enable_mwan }}
+
+          📦 产物文件:
+          EOF
+
+          cd $GITHUB_WORKSPACE/artifacts
+          if [ -n "$(ls -A *.bin *.img.gz 2>/dev/null)" ]; then
+            ls -lh *.bin *.img.gz 2>/dev/null | awk '{print "  • " $9 " (" $5 ")"}' >> MANIFEST.txt
+          else
+            echo "  (无产物文件)" >> MANIFEST.txt
+          fi
+
+      - name: 上传构建结果
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ImmortalWrt-H5000M-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 30
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v1
+        if: success()
+        with:
+          tag_name: v${{ github.run_number }}
+          name: ImmortalWrt H5000M #${{ github.run_number }} [${{ needs.analyze.outputs.build-strategy }}]
+          body: |
+            🎉 **ImmortalWrt H5000M 固件已构建完成**
+
+            📅 时间: $(date '+%Y-%m-%d %H:%M:%S')
+            🔗 运行 ID: ${{ github.run_id }}
+
+            **🎯 构建信息:**
+            - 策略: ${{ needs.analyze.outputs.build-strategy }}
+            - 模式: ${{ needs.analyze.outputs.use-parallel == 'true' && '并行' || '顺序' }}
+            - 优化: ${{ needs.analyze.outputs.use-incremental == 'true' && '增量' || '完整' }}
+            - 线程: ${{ needs.analyze.outputs.optimal-threads }}
+
+            **⚙️ 启用的功能:**
+            - AdGuardHome: ${{ inputs.enable_adguardhome }}
+            - OpenClash: ${{ inputs.enable_openclash }}
+            - Mihomo: ${{ inputs.enable_mihomo }}
+            - UPnP: ${{ inputs.enable_upnp }}
+            - VLMCSd: ${{ inputs.enable_vlmcsd }}
+            - MosDNS: ${{ inputs.enable_mosdns }}
+            - Docker: ${{ inputs.enable_dockerman }}
+            - MWAN: ${{ inputs.enable_mwan }}
+
+            💾 下载产物: 见下方 Artifacts
+            📋 详细信息: 见 MANIFEST.txt
+          prerelease: false
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Job 5: 性能报告和优化建议
+  report:
+    name: 📊 性能报告
+    runs-on: ubuntu-22.04
+    needs: [analyze, package]
+    if: always() && needs.analyze.result == 'success'
+    steps:
+      - name: 生成性能报告
+        run: |
+          echo "## 🚀 ImmortalWrt H5000M 构建性能报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 构建统计" >> $GITHUB_STEP_SUMMARY
+          echo "- **构建策略**: ${{ needs.analyze.outputs.build-strategy }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **缓存命中率**: " >> $GITHUB_STEP_SUMMARY
+          echo "  - DL缓存: ${{ needs.analyze.outputs.cache-hit-dl == 'true' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - Toolchain: ${{ needs.analyze.outputs.cache-hit-toolchain == 'true' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - ccache: ${{ needs.analyze.outputs.cache-hit-ccache == 'true' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **优化参数**:" >> $GITHUB_STEP_SUMMARY
+          echo "  - 使用并行: ${{ needs.analyze.outputs.use-parallel }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - 使用增量: ${{ needs.analyze.outputs.use-incremental }}" >> $GITHUB_STEP_SUMMARY
+          echo "  - 最优线程: ${{ needs.analyze.outputs.optimal-threads }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **预估时间**: ${{ needs.analyze.outputs.estimated-time }}分钟" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 💡 优化建议" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.analyze.outputs.cache-hit-dl }}" = "false" ]; then
+            echo "- 🔄 建议启用DL缓存以加速后续构建" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.analyze.outputs.cache-hit-toolchain }}" = "false" ]; then
+            echo "- 🔧 Toolchain未命中，首次构建属正常情况" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.analyze.outputs.use-parallel }}" = "false" ]; then
+            echo "- 🚀 建议在后续构建中启用并行模式" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.analyze.outputs.use-incremental }}" = "false" ]; then
+            echo "- ⚡ 配置变更导致完整重建，下次将使用增量构建" >> $GITHUB_STEP_SUMMARY
+          fi
