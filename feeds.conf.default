@@ -7,9 +7,3 @@ src-git telephony https://github.com/openwrt/telephony.git;openwrt-24.10
 src-git qmodem https://github.com/FUjr/QModem.git;main
 # mihomo: Provides Mihomo proxy packages
 src-git mihomo https://github.com/morytyann/OpenWrt-mihomo.git;main
-# homeproxy: Provides HomeProxy packages
-src-git homeproxy https://github.com/immortalwrt/homeproxy.git;main
-# openclash: Provides OpenClash packages
-src-git openclash https://github.com/vernesong/OpenClash.git;master
-# dockerman: Provides Docker management packages
-src-git dockerman https://github.com/lisaac/luci-app-dockerman.git;master

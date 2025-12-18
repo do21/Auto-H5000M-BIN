@@ -169,8 +169,14 @@ jobs:
             echo "使用默认 feeds.conf.default"
           fi
 
-          ./scripts/feeds update -a || echo "警告: 部分 feeds 更新失败，继续进行..."
-          ./scripts/feeds install -a -f || echo "警告: 部分 feeds 安装失败，继续进行..."
+          ./scripts/feeds update -a || {
+            echo "警告: feeds 更新失败，重试一次..."
+            ./scripts/feeds update -a || echo "错误: feeds 更新仍然失败，继续进行..."
+          }
+          ./scripts/feeds install -a -f || {
+            echo "警告: feeds 安装失败，重试一次..."
+            ./scripts/feeds install -a -f || echo "错误: feeds 安装仍然失败，继续进行..."
+          }
 
           # 替换 golang 包为 sbwml 版本 (支持 golang 1.24.x)
           echo "替换 golang 包为最新版本..."
@@ -210,12 +216,6 @@ jobs:
             echo "❌ 错误: 不能同时启用 QModem Next 和 QModem 旧版！"
             exit 1
           fi
-          if [ "${{ inputs.enable_qmodem_next }}" = "true" ]; then
-            echo "✅ 选择 QModem Next (新版JS前端)，将启用 luci-compat 依赖"
-          fi
-          if [ "${{ inputs.enable_qmodem }}" = "true" ]; then
-            echo "✅ 选择 QModem (旧版)，将启用 luci-compat 依赖"
-          fi
 
           if [ -f "$GITHUB_WORKSPACE/h5000m.extra.config" ]; then
             cat "$GITHUB_WORKSPACE/h5000m.extra.config" >> .config
@@ -224,51 +224,38 @@ jobs:
             echo "未找到额外配置文件，使用默认 .config"
           fi
 
-          # 根据 inputs 启用可选插件
-          if [ "${{ inputs.enable_adguardhome }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-            echo "CONFIG_PACKAGE_adguardhome=y" >> .config
-            echo "启用 AdGuardHome"
+          # 根据 inputs 覆盖可选插件配置
+          if [ "${{ inputs.enable_adguardhome }}" = "false" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-adguardhome is not set" >> .config
+            echo "# CONFIG_PACKAGE_adguardhome is not set" >> .config
+            echo "禁用 AdGuardHome"
           fi
           if [ "${{ inputs.enable_homeproxy }}" = "true" ]; then
             echo "CONFIG_PACKAGE_luci-app-homeproxy=y" >> .config
             echo "启用 HomeProxy"
           fi
-          if [ "${{ inputs.enable_openclash }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-            echo "CONFIG_PACKAGE_bash=y" >> .config
-            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-            echo "CONFIG_PACKAGE_curl=y" >> .config
-            echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
-            echo "CONFIG_PACKAGE_ip-full=y" >> .config
-            echo "CONFIG_PACKAGE_ruby=y" >> .config
-            echo "CONFIG_PACKAGE_ruby-yaml=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-tun=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-inet-diag=y" >> .config
-            echo "CONFIG_PACKAGE_unzip=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
-            echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-            echo "CONFIG_PACKAGE_luci=y" >> .config
-            echo "CONFIG_PACKAGE_luci-base=y" >> .config
-            echo "启用 OpenClash (仅nftables)"
+          if [ "${{ inputs.enable_openclash }}" = "false" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-openclash is not set" >> .config
+            echo "# CONFIG_PACKAGE_luci-i18n-opkg-zh-cn is not set" >> .config
+            echo "# CONFIG_PACKAGE_luci-i18n-openclash-zh-cn is not set" >> .config
+            echo "# CONFIG_PACKAGE_kmod-nft-tproxy is not set" >> .config
+            echo "# CONFIG_PACKAGE_ip-full is not set" >> .config
+            echo "# CONFIG_PACKAGE_iptables-nft is not set" >> .config
+            echo "禁用 OpenClash"
           fi
           if [ "${{ inputs.enable_mihomo }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_nikki=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y" >> .config
-            echo "CONFIG_PACKAGE_mihomo=y" >> .config
             echo "CONFIG_PACKAGE_luci-app-mihomo=y" >> .config
-            echo "CONFIG_PACKAGE_luci-i18n-mihomo-zh-cn=y" >> .config
+            echo "CONFIG_PACKAGE_mihomo=y" >> .config
             echo "启用 Mihomo"
           fi
-          if [ "${{ inputs.enable_upnp }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-            echo "启用 UPnP"
+          if [ "${{ inputs.enable_upnp }}" = "false" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-upnp is not set" >> .config
+            echo "禁用 UPnP"
           fi
-          if [ "${{ inputs.enable_vlmcsd }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
-            echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
-            echo "启用 VLMCSd"
+          if [ "${{ inputs.enable_vlmcsd }}" = "false" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-vlmcsd is not set" >> .config
+            echo "# CONFIG_PACKAGE_vlmcsd is not set" >> .config
+            echo "禁用 VLMCSd"
           fi
           if [ "${{ inputs.enable_smartdns }}" = "true" ]; then
             echo "CONFIG_PACKAGE_smartdns=y" >> .config
@@ -276,40 +263,30 @@ jobs:
             echo "CONFIG_PACKAGE_luci-app-smartdns-zh-cn=y" >> .config
             echo "启用 SmartDNS"
           fi
-          if [ "${{ inputs.enable_mosdns }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_mosdns=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
-            echo "启用 MosDNS"
+          if [ "${{ inputs.enable_mosdns }}" = "false" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-mosdns is not set" >> .config
+            echo "# CONFIG_PACKAGE_mosdns is not set" >> .config
+            echo "禁用 MosDNS"
           fi
           if [ "${{ inputs.enable_dockerman }}" = "true" ]; then
             echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
             echo "CONFIG_PACKAGE_docker=y" >> .config
-            echo "CONFIG_PACKAGE_docker-compose=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-veth=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-dm=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-br-netfilter=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-ipt-nat=y" >> .config
+            echo "CONFIG_PACKAGE_dockerd=y" >> .config
             echo "启用 DockerMan"
           fi
-          if [ "${{ inputs.enable_qmodem_next }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-qmodem-next=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_vendor-qmi-wwan=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_ndisc6=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-qmodem_USE_TOM_CUSTOMIZED_QUECTEL_CM=y" >> .config
-            echo "启用 QModem Next (新版JS前端)"
+          if [ "${{ inputs.enable_qmodem_next }}" = "false" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-qmodem-next is not set" >> .config
+            echo "禁用 QModem Next"
           fi
           if [ "${{ inputs.enable_qmodem }}" = "true" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-qmodem-next is not set" >> .config
             echo "CONFIG_PACKAGE_luci-app-qmodem=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_vendor-qmi-wwan=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-qmodem_INCLUDE_ndisc6=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-qmodem_USE_TOM_CUSTOMIZED_QUECTEL_CM=y" >> .config
             echo "启用 QModem (旧版)"
           fi
-          if [ "${{ inputs.enable_mwan }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-qmodem-mwan=y" >> .config
-            echo "CONFIG_PACKAGE_mwan3=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-mwan3=y" >> .config
-            echo "启用 MWAN (多WAN负载均衡)"
+          if [ "${{ inputs.enable_mwan }}" = "false" ]; then
+            echo "# CONFIG_PACKAGE_luci-app-qmodem-mwan is not set" >> .config
+            echo "# CONFIG_PACKAGE_mwan3 is not set" >> .config
+            echo "禁用 MWAN"
           fi
 
           make defconfig || true
@@ -351,7 +328,6 @@ jobs:
           if [ "${{ inputs.enable_mwan }}" = "true" ]; then
             grep -E "CONFIG_PACKAGE_(luci-app-qmodem-mwan|mwan3)=" .config || echo "MWAN 包未找到"
           fi
-      - name: 下载依赖包
         run: |
           cd $SOURCE_DIR
           echo "📥 开始下载依赖包..."
@@ -728,8 +704,14 @@ jobs:
             echo "使用默认 feeds.conf.default"
           fi
 
-          ./scripts/feeds update -a || echo "警告: 部分 feeds 更新失败，继续进行..."
-          ./scripts/feeds install -a -f || echo "警告: 部分 feeds 安装失败，继续进行..."
+          ./scripts/feeds update -a || {
+            echo "警告: feeds 更新失败，重试一次..."
+            ./scripts/feeds update -a || echo "错误: feeds 更新仍然失败，继续进行..."
+          }
+          ./scripts/feeds install -a -f || {
+            echo "警告: feeds 安装失败，重试一次..."
+            ./scripts/feeds install -a -f || echo "错误: feeds 安装仍然失败，继续进行..."
+          }
 
           # 替换 golang 包为 sbwml 版本 (支持 golang 1.24.x)
           echo "替换 golang 包为最新版本..."
@@ -910,7 +892,6 @@ jobs:
           if [ "${{ inputs.enable_mwan }}" = "true" ]; then
             grep -E "CONFIG_PACKAGE_(luci-app-qmodem-mwan|mwan3)=" .config || echo "MWAN 包未找到"
           fi
-      - name: 下载并编译
         run: |
           cd $SOURCE_DIR
 
