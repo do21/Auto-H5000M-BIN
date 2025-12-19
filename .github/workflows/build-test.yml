@@ -199,6 +199,19 @@ jobs:
             # 修复安装脚本
             AGH_SCRIPT="package/luci-app-adguardhome/root/usr/share/AdGuardHome/links.sh"
             [ -f "$AGH_SCRIPT" ] && sed -i 's|mv /usr/bin/AdGuardHome|rm -rf /usr/bin/AdGuardHome 2>/dev/null; mkdir -p /usr/bin/AdGuardHome; mv|g' "$AGH_SCRIPT" || true
+            
+            # 修复初始化脚本
+            AGH_INIT="package/luci-app-adguardhome/root/etc/init.d/AdGuardHome"
+            if [ -f "$AGH_INIT" ]; then
+              # 确保 /usr/bin/AdGuardHome 是目录
+              sed -i '/^#!/a\
+          # 清理冲突的 /usr/bin/AdGuardHome 路径\
+          [ -e /usr/bin/AdGuardHome ] && rm -rf /usr/bin/AdGuardHome\
+          mkdir -p /usr/bin/AdGuardHome' "$AGH_INIT" || true
+            fi
+            
+            # 移除冲突的文件定义
+            rm -rf package/feeds/packages/adguardhome/files/usr/bin/AdGuardHome 2>/dev/null || true
           fi
 
           # 移除问题包
