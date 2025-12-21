@@ -1,4 +1,4 @@
-name: "Build ImmortalWrt H5000M"
+name: Build ImmortalWrt H5000M
 
 on:
   schedule:
@@ -147,7 +147,7 @@ jobs:
             ${{ env.SOURCE_DIR }}/build_dir
             ${{ env.SOURCE_DIR }}/tmp
             ~/.ccache
-          key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config') }}-${{ hash( join( [inputs.enable_adguardhome, inputs.enable_openclash, inputs.enable_mihomo, inputs.enable_upnp, inputs.enable_vlmcsd, inputs.enable_mosdns, inputs.enable_dockerman, inputs.enable_qmodem_next, inputs.enable_qmodem, inputs.enable_mwan, inputs.enable_homeproxy], '' ) ) }}
+          key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config') }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config') }}-${{ steps.set-env.outputs.enable_adguardhome }}-${{ steps.set-env.outputs.enable_openclash }}-${{ steps.set-env.outputs.enable_mihomo }}-${{ steps.set-env.outputs.enable_upnp }}-${{ steps.set-env.outputs.enable_vlmcsd }}-${{ steps.set-env.outputs.enable_mosdns }}-${{ steps.set-env.outputs.enable_dockerman }}-${{ steps.set-env.outputs.enable_qmodem_next }}-${{ steps.set-env.outputs.enable_qmodem }}-${{ steps.set-env.outputs.enable_mwan }}-${{ steps.set-env.outputs.enable_homeproxy }}
           restore-keys: |
             ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
 
