@@ -201,7 +201,7 @@ jobs:
           # 动态管理 feeds.conf.default
           if [ "${{ steps.set-env.outputs.enable_mihomo }}" = "true" ]; then
             if ! grep -q "src-git nikki" feeds.conf.default; then
-              echo 'src-git nikki https://github.com/nikkinikki-org/OpenWrt-nikki.git;main' >> feeds.conf.default
+              echo 'src-git nikki https://github.com/kiddin9/luci-app-mihomo;main' >> feeds.conf.default
             fi
           else
             sed -i '/src-git nikki/d' feeds.conf.default
