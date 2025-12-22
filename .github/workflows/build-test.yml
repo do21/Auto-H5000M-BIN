@@ -194,7 +194,7 @@ jobs:
             cp "$GITHUB_WORKSPACE/feeds.conf.default" ./feeds.conf.default
           fi
 
-          # 根据输入动态管理 feeds
+          # 根据输入动态管理 feeds，确保 feeds.conf.default 和 feeds 目录始终同步
           # Nikki feed
           if [ "${{ steps.set-env.outputs.enable_mihomo }}" = "true" ]; then
             if ! grep -q "nikki" feeds.conf.default; then
@@ -203,8 +203,9 @@ jobs:
           else
             sed -i '/nikki/d' feeds.conf.default
             rm -rf feeds/nikki 2>/dev/null || true
+            find feeds/ -maxdepth 1 -type d -name 'nikki*' -exec rm -rf {} + 2>/dev/null || true
           fi
-          
+
           # QModem feed
           if [ "${{ steps.set-env.outputs.enable_qmodem_next }}" = "true" ] || [ "${{ steps.set-env.outputs.enable_qmodem }}" = "true" ]; then
             if ! grep -q "qmodem" feeds.conf.default; then
@@ -213,6 +214,7 @@ jobs:
           else
             sed -i '/qmodem/d' feeds.conf.default
             rm -rf feeds/qmodem 2>/dev/null || true
+            find feeds/ -maxdepth 1 -type d -name 'qmodem*' -exec rm -rf {} + 2>/dev/null || true
           fi
           
           # HomeProxy feed
@@ -223,6 +225,7 @@ jobs:
           else
             sed -i '/homeproxy/d' feeds.conf.default
             rm -rf feeds/homeproxy 2>/dev/null || true
+            find feeds/ -maxdepth 1 -type d -name 'homeproxy*' -exec rm -rf {} + 2>/dev/null || true
           fi
           
           # Adbyby Plus feed
@@ -233,6 +236,7 @@ jobs:
           else
             sed -i '/coolsnowwolf_luci/d' feeds.conf.default
             rm -rf feeds/coolsnowwolf_luci 2>/dev/null || true
+            find feeds/ -maxdepth 1 -type d -name 'coolsnowwolf_luci*' -exec rm -rf {} + 2>/dev/null || true
           fi
 
           # 更新 feeds
