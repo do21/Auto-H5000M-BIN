@@ -339,69 +339,22 @@ jobs:
             cat "$GITHUB_WORKSPACE/h5000m.extra.config" >> .config
           fi
 
-          # 根据输入动态配置包
+          # 根据输入动态配置包（简化：只启用顶层包，依赖由 make defconfig 自动解析）
           # 收集要禁用的包
           disabled_pkgs=("luci-app-modem" "modem" "luci-app-sms-tool-lite" "luci-app-3ginfo-lite")
 
-          # AdGuardHome
-          if [ "${{ steps.set-env.outputs.enable_adguardhome }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-            echo "CONFIG_PACKAGE_adguardhome=y" >> .config
-          else
-            disabled_pkgs+=("luci-app-adguardhome" "adguardhome")
-          fi
+          # 定义包列表（用于循环）
+          packages=("adguardhome" "openclash" "nikki" "upnp" "vlmcsd" "mosdns" "dockerman" "mwan" "homeproxy" "adbyby_plus")
 
-          # OpenClash
-          if [ "${{ steps.set-env.outputs.enable_openclash }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
-            echo "CONFIG_PACKAGE_bash=y" >> .config
-            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
-            echo "CONFIG_PACKAGE_curl=y" >> .config
-            echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
-            echo "CONFIG_PACKAGE_ip-full=y" >> .config
-            echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
-            echo "CONFIG_PACKAGE_luci-compat=y" >> .config
-          else
-            disabled_pkgs+=("luci-app-openclash")
-          fi
+          for pkg in "${packages[@]}"; do
+            if [ "${!pkg}" = "true" ]; then
+              echo "CONFIG_PACKAGE_luci-app-$pkg=y" >> .config
+            else
+              disabled_pkgs+=("luci-app-$pkg")
+            fi
+          done
 
-          # Nikki
-          if [ "${{ steps.set-env.outputs.enable_nikki }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_nikki=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
-          else
-            disabled_pkgs+=("nikki" "luci-app-nikki")
-          fi
-
-          # 其他包
-          if [ "${{ steps.set-env.outputs.enable_upnp }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
-          else
-            disabled_pkgs+=("luci-app-upnp")
-          fi
-
-          if [ "${{ steps.set-env.outputs.enable_vlmcsd }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
-          else
-            disabled_pkgs+=("vlmcsd" "luci-app-vlmcsd")
-          fi
-
-          if [ "${{ steps.set-env.outputs.enable_mosdns }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_mosdns=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
-          else
-            disabled_pkgs+=("mosdns" "luci-app-mosdns")
-          fi
-
-          if [ "${{ steps.set-env.outputs.enable_dockerman }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_docker=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
-          else
-            disabled_pkgs+=("docker" "luci-app-dockerman")
-          fi
-
-          # QModem
+          # QModem 特殊处理（互斥）
           if [ "${{ steps.set-env.outputs.enable_qmodem_next }}" = "true" ]; then
             echo "CONFIG_PACKAGE_luci-app-qmodem-next=y" >> .config
           elif [ "${{ steps.set-env.outputs.enable_qmodem }}" = "true" ]; then
@@ -410,28 +363,7 @@ jobs:
             disabled_pkgs+=("luci-app-qmodem-next" "luci-app-qmodem")
           fi
 
-          # MWAN
-          if [ "${{ steps.set-env.outputs.enable_mwan }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_mwan3=y" >> .config
-            echo "CONFIG_PACKAGE_luci-app-mwan3=y" >> .config
-          else
-            disabled_pkgs+=("mwan3" "luci-app-mwan3")
-          fi
-
-          # HomeProxy
-          if [ "${{ steps.set-env.outputs.enable_homeproxy }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-homeproxy=y" >> .config
-          else
-            disabled_pkgs+=("luci-app-homeproxy")
-          fi
-
-          # Adbyby Plus
-          if [ "${{ steps.set-env.outputs.enable_adbyby_plus }}" = "true" ]; then
-            echo "CONFIG_PACKAGE_luci-app-adbyby-plus=y" >> .config
-          else
-            disabled_pkgs+=("luci-app-adbyby-plus")
-          fi
-
+          # 自动解析依赖（关键：make defconfig 会启用所有必需依赖）
           make defconfig
 
           # 统一禁用不需要的包
@@ -521,7 +453,7 @@ jobs:
       - name: 编译固件
         run: |
           cd $SOURCE_DIR
-          THREADS=$(nproc)  # 使用所有可用核心以提高效率
+          THREADS=$(nproc)  # 动态使用所有可用核心，提高效率
           export PATH="/usr/lib/ccache:$PATH"
           
           echo "🔨 开始编译 (${THREADS} 线程)..."
@@ -530,7 +462,7 @@ jobs:
           
           START_TIME=$(date +%s)
           
-          # 下载依赖
+          # 优化：预检查依赖，避免重复下载
           if [ -z "$(ls -A dl 2>/dev/null)" ] || ! make download -j$THREADS; then
             echo "⚠️ 下载依赖..."
             find dl -size -1024c -delete 2>/dev/null || true
@@ -539,7 +471,7 @@ jobs:
             echo "✅ 依赖已存在，跳过下载"
           fi
           
-          # 编译
+          # 编译（使用 V=s 仅在失败时显示详细日志，提高效率）
           if make -j$THREADS IGNORE_ERRORS=n; then
             END_TIME=$(date +%s)
             DURATION=$((END_TIME - START_TIME))
@@ -547,7 +479,7 @@ jobs:
             echo "📊 CCache 统计 (结束):"
             ccache -s || true
           else
-            echo "⚠️ 并行编译失败，尝试单线程..."
+            echo "⚠️ 并行编译失败，尝试单线程调试..."
             make -j1 V=s || {
               echo "❌ 编译失败"
               exit 1
