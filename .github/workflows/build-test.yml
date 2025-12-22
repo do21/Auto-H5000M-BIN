@@ -15,7 +15,7 @@ on:
         required: false
         default: false
         type: boolean
-      enable_mihomo:
+      enable_nikki:
         description: '启用 Nikki'
         required: false
         default: false
@@ -84,7 +84,7 @@ jobs:
     outputs:
       enable_adguardhome: ${{ steps.set-env.outputs.enable_adguardhome }}
       enable_openclash: ${{ steps.set-env.outputs.enable_openclash }}
-      enable_mihomo: ${{ steps.set-env.outputs.enable_mihomo }}
+      enable_nikki: ${{ steps.set-env.outputs.enable_nikki }}
       enable_upnp: ${{ steps.set-env.outputs.enable_upnp }}
       enable_vlmcsd: ${{ steps.set-env.outputs.enable_vlmcsd }}
       enable_mosdns: ${{ steps.set-env.outputs.enable_mosdns }}
@@ -98,18 +98,12 @@ jobs:
       - name: 设置环境变量
         id: set-env
         run: |
-          echo "enable_adguardhome=${{ inputs.enable_adguardhome || false }}" >> $GITHUB_OUTPUT
-          echo "enable_openclash=${{ inputs.enable_openclash || false }}" >> $GITHUB_OUTPUT
-          echo "enable_mihomo=${{ inputs.enable_mihomo || false }}" >> $GITHUB_OUTPUT
-          echo "enable_upnp=${{ inputs.enable_upnp || false }}" >> $GITHUB_OUTPUT
-          echo "enable_vlmcsd=${{ inputs.enable_vlmcsd || false }}" >> $GITHUB_OUTPUT
-          echo "enable_mosdns=${{ inputs.enable_mosdns || false }}" >> $GITHUB_OUTPUT
-          echo "enable_dockerman=${{ inputs.enable_dockerman || false }}" >> $GITHUB_OUTPUT
-          echo "enable_qmodem_next=${{ inputs.enable_qmodem_next || false }}" >> $GITHUB_OUTPUT
-          echo "enable_qmodem=${{ inputs.enable_qmodem || false }}" >> $GITHUB_OUTPUT
-          echo "enable_mwan=${{ inputs.enable_mwan || false }}" >> $GITHUB_OUTPUT
-          echo "enable_homeproxy=${{ inputs.enable_homeproxy || false }}" >> $GITHUB_OUTPUT
-          echo "enable_adbyby_plus=${{ inputs.enable_adbyby_plus || false }}" >> $GITHUB_OUTPUT
+          # 使用循环设置输出变量
+          for var in adguardhome openclash nikki upnp vlmcsd mosdns dockerman qmodem_next qmodem mwan homeproxy adbyby_plus; do
+            value="${!var}"
+            [ -z "$value" ] && value="false"
+            echo "enable_$var=$value" >> $GITHUB_OUTPUT
+          done
 
       - name: 检出代码
         uses: actions/checkout@v4
@@ -154,7 +148,7 @@ jobs:
             ${{ env.SOURCE_DIR }}/staging_dir
             ${{ env.SOURCE_DIR }}/build_dir
             ~/.ccache
-          key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config') }}-${{ steps.set-env.outputs.enable_adguardhome }}-${{ steps.set-env.outputs.enable_openclash }}-${{ steps.set-env.outputs.enable_mihomo }}-${{ steps.set-env.outputs.enable_upnp }}-${{ steps.set-env.outputs.enable_vlmcsd }}-${{ steps.set-env.outputs.enable_mosdns }}-${{ steps.set-env.outputs.enable_dockerman }}-${{ steps.set-env.outputs.enable_qmodem_next }}-${{ steps.set-env.outputs.enable_qmodem }}-${{ steps.set-env.outputs.enable_mwan }}-${{ steps.set-env.outputs.enable_homeproxy }}-${{ steps.set-env.outputs.enable_adbyby_plus }}
+          key: ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-${{ hashFiles('feeds.conf.default', 'h5000m.extra.config') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ env.REPO_BRANCH }}-
 
@@ -199,20 +193,17 @@ jobs:
           rm -rf feeds/nikki feeds/nikki.* feeds/nikki* feeds/nikki.index 2>/dev/null || true
 
           # 动态管理 feeds.conf.default
-          if [ "${{ steps.set-env.outputs.enable_mihomo }}" = "true" ]; then
-            if ! grep -q "src-git nikki" feeds.conf.default; then
-              echo 'src-git nikki https://github.com/kiddin9/luci-app-mihomo;main' >> feeds.conf.default
-            fi
+          if [ "${{ steps.set-env.outputs.enable_nikki }}" = "true" ]; then
+            # nikki 默认已启用，无需添加
+            :
           else
             sed -i '/src-git nikki/d' feeds.conf.default
           fi
 
-          # 其他 feeds 动态管理（保持原有逻辑）
           # QModem feed
           if [ "${{ steps.set-env.outputs.enable_qmodem_next }}" = "true" ] || [ "${{ steps.set-env.outputs.enable_qmodem }}" = "true" ]; then
-            if ! grep -q "qmodem" feeds.conf.default; then
-              echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.default
-            fi
+            # qmodem 默认已启用，无需添加
+            :
           else
             sed -i '/qmodem/d' feeds.conf.default
           fi
@@ -302,6 +293,18 @@ jobs:
             sed -i 's/+kmod-mt_wifi_osal//g' "$MT_HWIFI_MK" || true
           fi
 
+          # 修复 qmi_wwan_f.c 编译错误
+          QMI_WWAN_FILE="package/mtk/applications/5g-modem/fibocom_QMI_WWAN/qmi_wwan_f.c"
+          if [ -f "$QMI_WWAN_FILE" ]; then
+            echo "🔧 修复 qmi_wwan_f.c 编译错误..."
+            # 替换 u64_stats_fetch_begin_irq 为 u64_stats_fetch_begin
+            sed -i 's/u64_stats_fetch_begin_irq/u64_stats_fetch_begin/g' "$QMI_WWAN_FILE"
+            # 替换 u64_stats_fetch_retry_irq 为 u64_stats_fetch_retry
+            sed -i 's/u64_stats_fetch_retry_irq/u64_stats_fetch_retry/g' "$QMI_WWAN_FILE"
+            # 修复 memcpy const 问题，cast dest to (void *)
+            sed -i 's/memcpy (qmap_net->dev_addr, real_dev->dev_addr, ETH_ALEN);/memcpy ((void *)qmap_net->dev_addr, real_dev->dev_addr, ETH_ALEN);/g' "$QMI_WWAN_FILE"
+          fi
+
           echo "✅ 依赖修复完成"
 
       - name: 配置构建
@@ -334,128 +337,105 @@ jobs:
           fi
 
           # 根据输入动态配置包
-          enable_pkg() { echo "CONFIG_PACKAGE_$1=y" >> .config; }
-          disable_pkg() { echo "# CONFIG_PACKAGE_$1 is not set" >> .config; }
-
-          # 禁用旧的modem包以避免与qmodem冲突
-          disable_pkg "luci-app-modem"
-          disable_pkg "modem"
-          disable_pkg "luci-app-sms-tool-lite"
-          disable_pkg "luci-app-3ginfo-lite"
+          # 收集要禁用的包
+          disabled_pkgs=("luci-app-modem" "modem" "luci-app-sms-tool-lite" "luci-app-3ginfo-lite")
 
           # AdGuardHome
           if [ "${{ steps.set-env.outputs.enable_adguardhome }}" = "true" ]; then
-            enable_pkg "luci-app-adguardhome"
-            enable_pkg "adguardhome"
+            echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+            echo "CONFIG_PACKAGE_adguardhome=y" >> .config
           else
-            disable_pkg "luci-app-adguardhome"
-            disable_pkg "adguardhome"
+            disabled_pkgs+=("luci-app-adguardhome" "adguardhome")
           fi
 
           # OpenClash
           if [ "${{ steps.set-env.outputs.enable_openclash }}" = "true" ]; then
-            enable_pkg "luci-app-openclash"
-            enable_pkg "bash"
-            enable_pkg "dnsmasq-full"
-            enable_pkg "curl"
-            enable_pkg "ca-bundle"
-            enable_pkg "ip-full"
-            enable_pkg "kmod-nft-tproxy"
-            enable_pkg "luci-compat"
+            echo "CONFIG_PACKAGE_luci-app-openclash=y" >> .config
+            echo "CONFIG_PACKAGE_bash=y" >> .config
+            echo "CONFIG_PACKAGE_dnsmasq-full=y" >> .config
+            echo "CONFIG_PACKAGE_curl=y" >> .config
+            echo "CONFIG_PACKAGE_ca-bundle=y" >> .config
+            echo "CONFIG_PACKAGE_ip-full=y" >> .config
+            echo "CONFIG_PACKAGE_kmod-nft-tproxy=y" >> .config
+            echo "CONFIG_PACKAGE_luci-compat=y" >> .config
           else
-            disable_pkg "luci-app-openclash"
+            disabled_pkgs+=("luci-app-openclash")
           fi
 
-          # Mihomo
-          if [ "${{ steps.set-env.outputs.enable_mihomo }}" = "true" ]; then
-            enable_pkg "nikki"
-            enable_pkg "luci-app-nikki"
+          # Nikki
+          if [ "${{ steps.set-env.outputs.enable_nikki }}" = "true" ]; then
+            echo "CONFIG_PACKAGE_nikki=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-nikki=y" >> .config
           else
-            disable_pkg "nikki"
-            disable_pkg "luci-app-nikki"
+            disabled_pkgs+=("nikki" "luci-app-nikki")
           fi
 
           # 其他包
           if [ "${{ steps.set-env.outputs.enable_upnp }}" = "true" ]; then
-            enable_pkg "luci-app-upnp"
+            echo "CONFIG_PACKAGE_luci-app-upnp=y" >> .config
           else
-            disable_pkg "luci-app-upnp"
+            disabled_pkgs+=("luci-app-upnp")
           fi
 
           if [ "${{ steps.set-env.outputs.enable_vlmcsd }}" = "true" ]; then
-            enable_pkg "vlmcsd"
-            enable_pkg "luci-app-vlmcsd"
+            echo "CONFIG_PACKAGE_vlmcsd=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-vlmcsd=y" >> .config
           else
-            disable_pkg "vlmcsd"
-            disable_pkg "luci-app-vlmcsd"
+            disabled_pkgs+=("vlmcsd" "luci-app-vlmcsd")
           fi
 
           if [ "${{ steps.set-env.outputs.enable_mosdns }}" = "true" ]; then
-            enable_pkg "mosdns"
-            enable_pkg "luci-app-mosdns"
+            echo "CONFIG_PACKAGE_mosdns=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
           else
-            disable_pkg "mosdns"
-            disable_pkg "luci-app-mosdns"
+            disabled_pkgs+=("mosdns" "luci-app-mosdns")
           fi
 
           if [ "${{ steps.set-env.outputs.enable_dockerman }}" = "true" ]; then
-            enable_pkg "docker"
-            enable_pkg "luci-app-dockerman"
+            echo "CONFIG_PACKAGE_docker=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-dockerman=y" >> .config
           else
-            disable_pkg "docker"
-            disable_pkg "luci-app-dockerman"
+            disabled_pkgs+=("docker" "luci-app-dockerman")
           fi
 
           # QModem
           if [ "${{ steps.set-env.outputs.enable_qmodem_next }}" = "true" ]; then
-            enable_pkg "luci-app-qmodem-next"
+            echo "CONFIG_PACKAGE_luci-app-qmodem-next=y" >> .config
           elif [ "${{ steps.set-env.outputs.enable_qmodem }}" = "true" ]; then
-            enable_pkg "luci-app-qmodem"
+            echo "CONFIG_PACKAGE_luci-app-qmodem=y" >> .config
           else
-            disable_pkg "luci-app-qmodem-next"
-            disable_pkg "luci-app-qmodem"
+            disabled_pkgs+=("luci-app-qmodem-next" "luci-app-qmodem")
           fi
 
           # MWAN
           if [ "${{ steps.set-env.outputs.enable_mwan }}" = "true" ]; then
-            enable_pkg "mwan3"
-            enable_pkg "luci-app-mwan3"
+            echo "CONFIG_PACKAGE_mwan3=y" >> .config
+            echo "CONFIG_PACKAGE_luci-app-mwan3=y" >> .config
           else
-            disable_pkg "mwan3"
-            disable_pkg "luci-app-mwan3"
+            disabled_pkgs+=("mwan3" "luci-app-mwan3")
           fi
 
           # HomeProxy
           if [ "${{ steps.set-env.outputs.enable_homeproxy }}" = "true" ]; then
-            enable_pkg "luci-app-homeproxy"
+            echo "CONFIG_PACKAGE_luci-app-homeproxy=y" >> .config
           else
-            disable_pkg "luci-app-homeproxy"
+            disabled_pkgs+=("luci-app-homeproxy")
           fi
 
           # Adbyby Plus
           if [ "${{ steps.set-env.outputs.enable_adbyby_plus }}" = "true" ]; then
-            enable_pkg "luci-app-adbyby-plus"
+            echo "CONFIG_PACKAGE_luci-app-adbyby-plus=y" >> .config
           else
-            disable_pkg "luci-app-adbyby-plus"
+            disabled_pkgs+=("luci-app-adbyby-plus")
           fi
 
           make defconfig
 
-          # 强制禁用不需要的包
-          disabled_packages=("luci-app-wrtbwmon" "luci-app-rclone" "rclone" "rclone-ng" "rclone-webui-react")
-          for pkg in "${disabled_packages[@]}"; do
+          # 统一禁用不需要的包
+          all_disabled=("luci-app-wrtbwmon" "luci-app-rclone" "rclone" "rclone-ng" "rclone-webui-react" "${disabled_pkgs[@]}")
+          for pkg in "${all_disabled[@]}"; do
             sed -i "/^CONFIG_PACKAGE_${pkg}=/d" .config
             echo "# CONFIG_PACKAGE_${pkg} is not set" >> .config
-          done
-
-          # 验证禁用包是否生效
-          echo "🔍 验证禁用包状态..."
-          for pkg in "${disabled_packages[@]}"; do
-            if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
-              echo "❌ 警告: $pkg 仍被启用"
-            else
-              echo "✅ $pkg 已禁用"
-            fi
           done
 
           echo "✅ 配置完成"
@@ -464,7 +444,7 @@ jobs:
         run: |
           cd $SOURCE_DIR
           echo "📥 预下载构建依赖..."
-          THREADS=$(nproc)
+          THREADS=4
           if [ -z "$(ls -A dl 2>/dev/null)" ]; then
             make download -j$THREADS || echo "⚠️ 下载失败，将在构建时重试"
           else
@@ -475,7 +455,7 @@ jobs:
         run: |
           cd $SOURCE_DIR
           echo "🔧 预构建工具链..."
-          THREADS=$(nproc)
+          THREADS=4
           if [ ! -d "staging_dir" ] || [ -z "$(ls -A staging_dir 2>/dev/null)" ]; then
             make toolchain/install -j$THREADS || echo "⚠️ 工具链构建失败，将在构建时重试"
           else
@@ -513,48 +493,32 @@ jobs:
         run: |
           echo "🧹 执行深度清理以释放磁盘空间..."
           
-          # 删除 Docker 镜像和容器
+          # 删除 Docker 资源
           docker rmi $(docker images -q) 2>/dev/null || true
           docker system prune -f 2>/dev/null || true
           
-          # 删除不需要的大型组件
-          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android \
-            /opt/ghc /etc/mysql /etc/php /usr/local/share/boost /usr/share/swift \
-            /opt/hostedtoolcache /usr/local/.ghcup /usr/local/graalvm /imagegeneration \
-            /usr/share/dotnet /usr/local/lib/android /opt/ghc /etc/mysql /etc/php \
+          # 删除大型组件
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /etc/mysql /etc/php \
             /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache /usr/local/.ghcup \
-            /usr/local/graalvm /imagegeneration 2>/dev/null || true
+            /usr/local/graalvm /imagegeneration /usr/local/share /opt /var/cache/apt/archives/* \
+            /etc/apt/sources.list.d/* 2>/dev/null || true
           
           # 卸载不需要的软件包
           sudo apt-get -y purge azure-cli* docker* ghc* zulu* hhvm* llvm* firefox* \
             google* dotnet* aspnetcore* powershell* openjdk* adoptopenjdk* mysql* php* \
             mongodb* moby* snap* 2>/dev/null || true
           
-          # 清理包管理器
-          sudo apt-get autoremove --purge -y
-          sudo apt-get clean
-          sudo apt-get autoclean
-          
-          # 清理临时文件和日志
-          sudo rm -rf /tmp/* /var/tmp/* /var/log/* 2>/dev/null || true
-          
-          # 清理用户缓存
-          rm -rf ~/.cache/* 2>/dev/null || true
+          # 清理包管理器和临时文件
+          sudo apt-get autoremove --purge -y && sudo apt-get clean && sudo apt-get autoclean
+          sudo rm -rf /tmp/* /var/tmp/* /var/log/* ~/.cache/* 2>/dev/null || true
           
           AVAIL_GB=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
           echo "✅ 清理后可用磁盘空间: ${AVAIL_GB}GB"
-          
-          if [ "$AVAIL_GB" -lt 10 ]; then
-            echo "⚠️ 磁盘空间仍不足，尝试额外清理..."
-            sudo rm -rf /usr/local/share /opt /var/cache/apt/archives/* 2>/dev/null || true
-            AVAIL_GB=$(df -BG / | tail -1 | awk '{print $4}' | sed 's/G//')
-            echo "✅ 额外清理后可用磁盘空间: ${AVAIL_GB}GB"
-          fi
 
       - name: 编译固件
         run: |
           cd $SOURCE_DIR
-          THREADS=$(nproc)
+          THREADS=4  # 固定线程数以提高效率
           export PATH="/usr/lib/ccache:$PATH"
           
           echo "🔨 开始编译 (${THREADS} 线程)..."
@@ -573,7 +537,7 @@ jobs:
           fi
           
           # 编译
-          if make -j$THREADS BUILD_LOG=1 IGNORE_ERRORS=m; then
+          if make -j$THREADS IGNORE_ERRORS=n; then
             END_TIME=$(date +%s)
             DURATION=$((END_TIME - START_TIME))
             echo "✅ 编译成功 (耗时: ${DURATION}s)"
@@ -639,7 +603,7 @@ jobs:
           ⚙️ 启用的功能:
           • AdGuardHome:   ${{ needs.prepare.outputs.enable_adguardhome }}
           • OpenClash:     ${{ needs.prepare.outputs.enable_openclash }}
-          • Nikki:        ${{ needs.prepare.outputs.enable_mihomo }}
+          • Nikki:        ${{ needs.prepare.outputs.enable_nikki }}
           • UPnP:          ${{ needs.prepare.outputs.enable_upnp }}
           • VLMCSd:        ${{ needs.prepare.outputs.enable_vlmcsd }}
           • MosDNS:        ${{ needs.prepare.outputs.enable_mosdns }}
@@ -679,7 +643,7 @@ jobs:
             **⚙️ 启用的功能:**
             - AdGuardHome: ${{ needs.prepare.outputs.enable_adguardhome }}
             - OpenClash: ${{ needs.prepare.outputs.enable_openclash }}
-            - Nikki: ${{ needs.prepare.outputs.enable_mihomo }}
+            - Nikki: ${{ needs.prepare.outputs.enable_nikki }}
             - UPnP: ${{ needs.prepare.outputs.enable_upnp }}
             - VLMCSd: ${{ needs.prepare.outputs.enable_vlmcsd }}
             - MosDNS: ${{ needs.prepare.outputs.enable_mosdns }}
