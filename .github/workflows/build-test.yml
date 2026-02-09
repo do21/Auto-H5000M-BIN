@@ -13,7 +13,7 @@ on:
       enable_openclash:
         description: '启用 OpenClash'
         required: false
-        default: false
+        default: true
         type: boolean
       enable_nikki:
         description: '启用 Nikki'
@@ -23,7 +23,7 @@ on:
       enable_upnp:
         description: '启用 UPnP'
         required: false
-        default: false
+        default: true
         type: boolean
       enable_vlmcsd:
         description: '启用 VLMCSd'
@@ -43,7 +43,7 @@ on:
       enable_qmodem_next:
         description: '启用 QModem Next (新版)'
         required: false
-        default: false
+        default: true
         type: boolean
       enable_qmodem:
         description: '启用 QModem (旧版)'
@@ -53,7 +53,7 @@ on:
       enable_mwan:
         description: '启用 MWAN (多WAN负载均衡)'
         required: false
-        default: false
+        default: true
         type: boolean
       enable_homeproxy:
         description: '启用 HomeProxy'
@@ -63,7 +63,7 @@ on:
       enable_adbyby_plus:
         description: '启用 Adbyby Plus'
         required: false
-        default: false
+        default: true
         type: boolean
       enable_original_modem:
         description: '启用原版 Modem'
